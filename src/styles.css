@@ -323,3 +323,8 @@ button.chip { cursor: pointer; }
   .rain-bg .drop { display: none; }
   .sent-check circle, .sent-check path { animation: none; stroke-dashoffset: 0; }
 }
+
+/* Students can't copy text from the game screen (the prompt box itself stays editable) */
+.page.student { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.page.student input, .page.student textarea { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
+.paste-note { background: rgba(255, 157, 176, 0.15); border: 1px solid var(--pink); color: var(--pink); border-radius: 10px; padding: 8px 12px; font-weight: 700; font-size: 0.92rem; }

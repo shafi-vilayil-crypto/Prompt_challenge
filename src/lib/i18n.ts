@@ -26,6 +26,7 @@ type Strings = {
   promptsSent: (n: number) => string; scanJoin: string; getReady: string; bestPrompts: string; method: string;
   youreFirst: string; topOfBoard: string; rankLine: (rank: number, of: number) => string; howToWrite: (name: string) => string;
   totalPoints: (n: number) => string; close: string; roundScore: string; sentTitle: string; welcome: (name: string) => string;
+  noPaste: string;
 };
 
 export const STRINGS: Record<Lang, Strings> = {
@@ -80,6 +81,7 @@ export const STRINGS: Record<Lang, Strings> = {
     roundScore: 'Your score this round',
     sentTitle: 'Prompt sent!',
     welcome: (name) => `Hi ${name}!`,
+    noPaste: 'Pasting is turned off in this game. Type your own prompt.',
   },
   ml: {
     whatsName: 'നിങ്ങളുടെ പേര് എന്താണ്?',
@@ -132,5 +134,6 @@ export const STRINGS: Record<Lang, Strings> = {
     roundScore: 'ഈ റൗണ്ടിലെ നിങ്ങളുടെ സ്കോർ',
     sentTitle: 'പ്രോംപ്റ്റ് അയച്ചു!',
     welcome: (name) => `ഹായ് ${name}!`,
+    noPaste: 'ഈ കളിയിൽ പേസ്റ്റ് ചെയ്യാൻ കഴിയില്ല. നിങ്ങളുടെ സ്വന്തം പ്രോംപ്റ്റ് ടൈപ്പ് ചെയ്യുക.',
   },
 };

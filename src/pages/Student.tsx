@@ -17,6 +17,10 @@ import { Confetti } from '../components/Confetti';
 import { WinnerBanner } from '../components/WinnerBanner';
 
 const SENT_KEY = 'prompt-challenge.sent'; // { [roundId]: promptText }
+// One change that adds more than this many characters is treated as a paste (some phone keyboards
+// paste from their clipboard bar as if typing). Normal typing and word suggestions stay well below it.
+const MAX_JUMP = 40;
+const blockCopy = (e: React.ClipboardEvent) => e.preventDefault();
 const CELEBRATED_KEY = 'prompt-challenge.celebrated'; // round ids where the #1 banner was already shown
 
 function loadSent(): Record<string, string> {
@@ -63,7 +67,7 @@ function NameForm({ lang, setLang, initial, onDone }: { lang: Lang; setLang: (l:
   const s = STRINGS[lang];
   const [name, setName] = useState(initial);
   return (
-    <main className="page narrow student">
+    <main className="page narrow student" onCopy={blockCopy} onCut={blockCopy}>
       <Brand><LangToggle lang={lang} onChange={setLang} /></Brand>
       <form className="card stack hero-card enter" onSubmit={(e) => { e.preventDefault(); if (name.trim()) onDone(name); }}>
         <div className="bounce-drop" aria-hidden="true" />
@@ -116,7 +120,7 @@ function Game({ lang, setLang, player, onChangeName }: { lang: Lang; setLang: (l
   }, 3000, [player.id]);
 
   return (
-    <main className="page narrow student">
+    <main className="page narrow student" onCopy={blockCopy} onCut={blockCopy}>
       <Brand>
         <div className="row wrap">
           <button className="player-chip" type="button" onClick={onChangeName} title={s.change}>
@@ -148,7 +152,14 @@ function Play({ lang, round, player }: { lang: Lang; round: Round; player: Playe
   const [sent, setSent] = useState<string | null>(() => loadSent()[round.id] ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [pasteNote, setPasteNote] = useState(false);
   const tokens = estimateTokens(text);
+
+  const refusePaste = (e: React.SyntheticEvent) => { e.preventDefault(); setPasteNote(true); };
+  function onType(next: string) {
+    if (next.length - text.length > MAX_JUMP) { setPasteNote(true); return; } // a paste in disguise: keep the old text
+    setText(next);
+  }
 
   async function submit() {
     const prompt = text.trim();
@@ -198,9 +209,17 @@ function Play({ lang, round, player }: { lang: Lang; round: Round; player: Playe
             rows={6}
             maxLength={1000}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => onType(e.target.value)}
+            onPaste={refusePaste}
+            onDrop={refusePaste}
+            onBeforeInput={(e) => {
+              const kind = (e.nativeEvent as InputEvent).inputType;
+              if (kind === 'insertFromPaste' || kind === 'insertFromDrop' || kind === 'insertFromYank') refusePaste(e);
+            }}
+            autoComplete="off"
             placeholder={s.placeholder}
           />
+          {pasteNote && <p className="paste-note" role="status">{s.noPaste}</p>}
           <div className="meter" aria-hidden="true"><span style={{ width: `${Math.min(100, (text.length / 1000) * 100)}%` }} /></div>
           <div className="row between wrap">
             <span className="token-count" title={s.tokensHelp}>{s.tokens(tokens)}</span>
