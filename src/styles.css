@@ -178,3 +178,4 @@ button.chip { cursor: pointer; }
 
 /* Token count */
 .token-count { font-weight: 700; color: var(--sky); font-size: 0.92rem; cursor: help; }
+.bonus-line { color: var(--yellow); font-weight: 700; }

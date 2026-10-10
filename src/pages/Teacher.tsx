@@ -7,7 +7,7 @@ import {
 } from '../lib/supabase';
 import { syncClock, useSecondsLeft } from '../lib/clock';
 import { usePoll } from '../lib/usePoll';
-import { DEFAULT_METHOD, MAX_BONUS, METHODS, autoParts, getMethod, maxScore, scoreOf, type Lang, type Method } from '../lib/methods';
+import { DEFAULT_METHOD, MAX_BONUS, METHODS, autoParts, getMethod, scoreOf, type Lang, type Method } from '../lib/methods';
 import { STRINGS, useLang } from '../lib/i18n';
 import { estimateTokens } from '../lib/tokens';
 import { MethodCard } from '../components/MethodCard';
@@ -276,7 +276,7 @@ function StartRound({ open, refresh }: { open: boolean; refresh: () => Promise<v
 
 function Scoring({ round, subs, refresh }: { round: Round; subs: Submission[]; refresh: () => Promise<void> }) {
   const method = getMethod(round.method);
-  const max = maxScore(method);
+  const max = method.parts.length * 2;
   const firstScore = (s: Submission) => s.score ?? scoreOf(method, autoParts(method, s.prompt), 0);
   const [marks, setMarks] = useState<Marks>({});
   const [busy, setBusy] = useState(false);
@@ -340,7 +340,7 @@ function Scoring({ round, subs, refresh }: { round: Round; subs: Submission[]; r
             <li key={s.id} className="sub">
               <div className="row between">
                 <strong className="sub-name">{s.name}</strong>
-                <span className="sub-score">{scoreOf(method, m.parts, m.bonus)}<span className="muted small"> / {max}</span></span>
+                <span className="sub-score">{scoreOf(method, m.parts, 0)}<span className="muted small"> / {max}{m.bonus > 0 ? ` +${m.bonus} bonus` : ''}</span></span>
               </div>
               <blockquote className="quote">{s.prompt}</blockquote>
               <span className="muted small">≈ {estimateTokens(s.prompt)} tokens</span>

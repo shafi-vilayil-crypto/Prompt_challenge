@@ -3,7 +3,7 @@ import { friendly, latestRound, leaderboard, supabase, type LeaderRow, type Roun
 import { syncClock, useSecondsLeft } from '../lib/clock';
 import { usePoll } from '../lib/usePoll';
 import { loadPlayer, savePlayer, type Player } from '../lib/player';
-import { getMethod, maxScore, type Lang } from '../lib/methods';
+import { getMethod, type Lang } from '../lib/methods';
 import { STRINGS, useLang } from '../lib/i18n';
 import { estimateTokens } from '../lib/tokens';
 import { Timer } from '../components/Timer';
@@ -190,7 +190,8 @@ function Play({ lang, round, player }: { lang: Lang; round: Round; player: Playe
 function Results({ lang, round, mine, board, player }: { lang: Lang; round: Round; mine: Submission | null; board: LeaderRow[]; player: Player }) {
   const s = STRINGS[lang];
   const method = getMethod(round.method);
-  const max = maxScore(method);
+  const partsMax = method.parts.length * 2;
+  const partsPts = mine && mine.score !== null ? mine.score - mine.bonus : 0;
   return (
     <>
       <section className="card stack">
@@ -202,13 +203,13 @@ function Results({ lang, round, mine, board, player }: { lang: Lang; round: Roun
         {mine && mine.score !== null ? (
           <div className="stack">
             <div className="score-line">
-              <span className="score-big">{mine.score}</span>
-              <span className="muted">/ {max}</span>
-              <span className="verdict">{s.verdict(mine.score, max)}</span>
+              <span className="score-big">{partsPts}</span>
+              <span className="muted">/ {partsMax}</span>
+              <span className="verdict">{s.verdict(partsPts, partsMax)}</span>
             </div>
+            {mine.bonus > 0 && <p className="bonus-line">{s.bonusTotal(mine.bonus, mine.score)}</p>}
             <span className="label">{s.partsLabel}</span>
             <PartChips method={method} on={mine.parts} lang={lang} compact />
-            {mine.bonus > 0 && <p className="success">{s.bonus(mine.bonus)}</p>}
             <blockquote className="quote">{mine.prompt}</blockquote>
             <span className="muted small">{s.tokens(estimateTokens(mine.prompt))}</span>
           </div>
