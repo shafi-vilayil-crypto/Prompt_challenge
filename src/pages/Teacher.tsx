@@ -18,6 +18,10 @@ import { PartChips } from '../components/PartChips';
 import { DEFAULT_MODEL, aiTest, loadAi, saveAi, type AiResult, type AiSettings } from '../lib/ai';
 import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL, claudeTest, loadClaude, saveClaude, type ClaudeSettings } from '../lib/claude';
 import { aiReady, scoreWithFallback } from '../lib/scorer';
+import {
+  COOLDOWN_AFTER_ERROR_MS, MAX_AI_PROMPTS_PER_ROUND, MAX_AUTO_ATTEMPTS,
+  loadSavedResults, loadUsage, releaseAiLock, saveResults, takeAiLock, type ClaudeUsage,
+} from '../lib/budget';
 import { Brand } from './Student';
 
 type Tab = 'run' | 'screen' | 'questions';
@@ -157,40 +161,75 @@ function Console() {
 
 const LIVE_EVERY_MS = 10_000;
 
-type AiState = { results: Record<string, AiResult>; busy: boolean; error: string; run: (onlyUntried: boolean) => Promise<void> };
+type AiState = {
+  results: Record<string, AiResult>; busy: boolean; error: string; note: string;
+  run: (manual: boolean) => Promise<void>;
+};
 
-/** AI scoring for the current round: Gemini first, Claude as the fallback. Runs live while the round is open. */
+/**
+ * AI scoring for the current round: Gemini first, Claude as the fallback. Runs live while the round is open.
+ * Money guards: each prompt is sent at most MAX_AUTO_ATTEMPTS times automatically; after an error automatic
+ * scoring pauses for a minute; at most MAX_AI_PROMPTS_PER_ROUND prompts per round go to the AI; results are
+ * saved so a reload never re-scores them; only one open teacher tab scores at a time.
+ */
 function useAi(round: Round | null, subs: Submission[], open: boolean, ai: AiSettings, claude: ClaudeSettings): AiState {
   const [results, setResults] = useState<Record<string, AiResult>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const tried = useRef(new Set<string>()); // prompts already sent automatically
+  const [note, setNote] = useState('');
+  const attempts = useRef(new Map<string, number>()); // automatic tries per prompt
+  const cooldownUntil = useRef(0);
   const busyRef = useRef(false);
   const latest = useRef({ round, subs, ai, claude, results });
   latest.current = { round, subs, ai, claude, results };
   const roundId = round?.id;
 
-  useEffect(() => { setResults({}); setError(''); tried.current = new Set(); }, [roundId]);
+  useEffect(() => {
+    setResults(roundId ? loadSavedResults<AiResult>(roundId) : {});
+    setError('');
+    setNote('');
+    attempts.current = new Map();
+    cooldownUntil.current = 0;
+  }, [roundId]);
 
-  const run = useCallback(async (onlyUntried: boolean) => {
+  useEffect(() => {
+    if (roundId && Object.keys(results).length) saveResults(roundId, results);
+  }, [roundId, results]);
+
+  useEffect(() => {
+    const release = () => releaseAiLock();
+    window.addEventListener('pagehide', release);
+    return () => { window.removeEventListener('pagehide', release); releaseAiLock(); };
+  }, []);
+
+  const run = useCallback(async (manual: boolean) => {
     const { round, subs, ai, claude, results } = latest.current;
     if (!round || !aiReady(ai, claude) || busyRef.current) return;
-    const todo = subs.filter((x) => !results[x.id] && (!onlyUntried || !tried.current.has(x.id)));
-    if (!todo.length) return;
-    todo.forEach((x) => tried.current.add(x.id));
+    if (!manual && Date.now() < cooldownUntil.current) return;
+    if (!takeAiLock()) { setNote('AI scoring is running in another teacher tab or window. Close the others to score here.'); return; }
+    setNote('');
+
+    const sentSoFar = attempts.current.size;
+    const room = Math.max(0, MAX_AI_PROMPTS_PER_ROUND - sentSoFar);
+    let todo = subs.filter((x) => !results[x.id] && (manual || (attempts.current.get(x.id) ?? 0) < MAX_AUTO_ATTEMPTS));
+    // The per-round cap counts prompts, so a flood of fake submissions can't run up the bill.
+    todo = todo.filter((x) => attempts.current.has(x.id) || todo.indexOf(x) < room);
+    if (!todo.length) {
+      if (subs.some((x) => !results[x.id]) && room === 0) setNote(`Only the first ${MAX_AI_PROMPTS_PER_ROUND} prompts of a round are scored by AI. The rest keep the word check.`);
+      return;
+    }
+    todo.forEach((x) => attempts.current.set(x.id, (attempts.current.get(x.id) ?? 0) + 1));
     busyRef.current = true;
     setBusy(true);
     setError('');
     const rid = round.id;
     try {
-      await scoreWithFallback(ai, claude, getMethod(round.method), round.question, todo.map((x) => ({ id: x.id, prompt: x.prompt })), (res) => {
+      await scoreWithFallback(ai, claude, rid, getMethod(round.method), round.question, todo.map((x) => ({ id: x.id, prompt: x.prompt })), (res) => {
         if (latest.current.round?.id === rid) setResults((r) => ({ ...r, ...res }));
       });
     } catch (e) {
       setError((e as Error).message);
-      // Let the prompts that didn't get a result be tried again on the next round of checks.
-      const got = latest.current.results;
-      todo.forEach((x) => { if (!got[x.id]) tried.current.delete(x.id); });
+      cooldownUntil.current = Date.now() + COOLDOWN_AFTER_ERROR_MS;
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -201,20 +240,20 @@ function useAi(round: Round | null, subs: Submission[], open: boolean, ai: AiSet
   // (a few calls a minute however many students there are), and once more when the round closes.
   useEffect(() => {
     if (!round || round.published || !aiReady(ai, claude)) return;
-    if (!open) { run(true); return; }
-    run(true);
-    const t = setInterval(() => run(true), LIVE_EVERY_MS);
+    if (!open) { run(false); return; }
+    run(false);
+    const t = setInterval(() => run(false), LIVE_EVERY_MS);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId, open, round?.published, ai.enabled, ai.apiKey, claude.enabled, claude.apiKey]);
 
-  // After the round closes, late prompts (or ones that failed) are picked up as they appear.
+  // After the round closes, late prompts are picked up as they appear.
   useEffect(() => {
-    if (round && !open && !round.published && aiReady(ai, claude)) run(true);
+    if (round && !open && !round.published && aiReady(ai, claude)) run(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subs.length]);
 
-  return { results, busy, error, run };
+  return { results, busy, error, note, run };
 }
 
 type Mark = { parts: string[]; bonus: number };
@@ -481,7 +520,7 @@ function Scoring({ round, subs, refresh, open, aiOn, aiState, scoring }: {
       </div>
       {aiOn && (
         <div className="row wrap">
-          <button className="btn" type="button" disabled={aiState.busy || pending === 0} onClick={() => aiState.run(false)}>
+          <button className="btn" type="button" disabled={aiState.busy || pending === 0} onClick={() => aiState.run(true)}>
             {aiState.busy ? 'AI is scoring…' : 'Score with AI'}
           </button>
           <span className="muted small">
@@ -489,7 +528,12 @@ function Scoring({ round, subs, refresh, open, aiOn, aiState, scoring }: {
           </span>
         </div>
       )}
-      {aiState.error && <p className="error" role="alert">{aiState.error} The word check scores are kept.</p>}
+      {aiState.error && (
+        <p className="error" role="alert">
+          {aiState.error} The word check scores are kept. Automatic scoring pauses for a minute; press "Score with AI" to try now.
+        </p>
+      )}
+      {aiState.note && <p className="muted small" role="status">{aiState.note}</p>}
       {armed && <p className="error" role="alert">{pending} {pending === 1 ? 'prompt has' : 'prompts have'} only the word check, which can't tell if a prompt fits the question. Press "Score with AI" first, or tap again to publish anyway.</p>}
       <ul className="sub-list">
         {ordered.map((s) => {
@@ -615,7 +659,20 @@ function AiSettingsCard({ ai, setAi }: { ai: AiSettings; setAi: (s: AiSettings) 
   );
 }
 
+function useClaudeUsage(): ClaudeUsage {
+  const [usage, setUsage] = useState<ClaudeUsage>(loadUsage);
+  useEffect(() => {
+    const update = () => setUsage(loadUsage());
+    window.addEventListener('claude-usage', update);
+    window.addEventListener('storage', update); // another tab
+    const t = setInterval(update, 30_000);      // picks up the new day
+    return () => { window.removeEventListener('claude-usage', update); window.removeEventListener('storage', update); clearInterval(t); };
+  }, []);
+  return usage;
+}
+
 function ClaudeCard({ claude, setClaude }: { claude: ClaudeSettings; setClaude: (c: ClaudeSettings) => void }) {
+  const usage = useClaudeUsage();
   const [key, setKey] = useState(claude.apiKey);
   const [model, setModel] = useState(claude.model);
   const [show, setShow] = useState(false);
@@ -672,6 +729,21 @@ function ClaudeCard({ claude, setClaude }: { claude: ClaudeSettings; setClaude: 
             {testing ? 'Testing…' : 'Save and test'}
           </button>
           {status && <p className={status.ok ? 'success' : 'error'} role="status">{status.text}</p>}
+          <div className="limits">
+            <label className="label" htmlFor="claude-per-day">Calls per day</label>
+            <input
+              id="claude-per-day" className="input" type="number" min={1} max={500} value={claude.perDay}
+              onChange={(e) => setClaude({ ...claude, perDay: Math.max(1, Math.min(500, Number(e.target.value) || 1)) })}
+            />
+            <label className="label" htmlFor="claude-per-round">Calls per round</label>
+            <input
+              id="claude-per-round" className="input" type="number" min={1} max={50} value={claude.perRound}
+              onChange={(e) => setClaude({ ...claude, perRound: Math.max(1, Math.min(50, Number(e.target.value) || 1)) })}
+            />
+          </div>
+          <p className={`small ${usage.calls >= claude.perDay ? 'error' : 'muted'}`}>
+            Today: {usage.calls} of {claude.perDay} Claude calls · about ${usage.usd.toFixed(2)} spent (estimate). One call scores up to 20 prompts.
+          </p>
           <p className="muted small">
             Get a key at <a className="link-inline" href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a> and set a monthly spend limit there.
             The key stays in this browser only. claude-haiku-5-5 is the cheapest model.

@@ -4,20 +4,29 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import type { Method } from './methods';
 import { instructions, parse, type AiResult } from './ai';
+import { BudgetError, checkClaudeBudget, recordClaudeCall } from './budget';
 
 const KEY = 'prompt-challenge.claude';
 export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5-5';
 export const CLAUDE_MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
 const BATCH = 20;
 
-export type ClaudeSettings = { enabled: boolean; apiKey: string; model: string };
+export type ClaudeSettings = { enabled: boolean; apiKey: string; model: string; perDay: number; perRound: number };
+export const DEFAULT_PER_DAY = 30;   // Claude calls per day
+export const DEFAULT_PER_ROUND = 5;  // Claude calls per round (each call scores up to 20 prompts)
+const clampLimit = (n: unknown, d: number) => Math.max(1, Math.min(500, Math.round(Number(n) || d)));
 
 export function loadClaude(): ClaudeSettings {
   try {
     const s = JSON.parse(localStorage.getItem(KEY) || 'null');
-    if (s && typeof s.apiKey === 'string') return { enabled: Boolean(s.enabled), apiKey: s.apiKey, model: s.model || DEFAULT_CLAUDE_MODEL };
+    if (s && typeof s.apiKey === 'string') {
+      return {
+        enabled: Boolean(s.enabled), apiKey: s.apiKey, model: s.model || DEFAULT_CLAUDE_MODEL,
+        perDay: clampLimit(s.perDay, DEFAULT_PER_DAY), perRound: clampLimit(s.perRound, DEFAULT_PER_ROUND),
+      };
+    }
   } catch { /* fall through */ }
-  return { enabled: false, apiKey: '', model: DEFAULT_CLAUDE_MODEL };
+  return { enabled: false, apiKey: '', model: DEFAULT_CLAUDE_MODEL, perDay: DEFAULT_PER_DAY, perRound: DEFAULT_PER_ROUND };
 }
 
 export function saveClaude(s: ClaudeSettings) {
@@ -35,7 +44,8 @@ const loadSdk = async (): Promise<Sdk> => (await import('@anthropic-ai/sdk')).de
 
 function client(A: Sdk, c: ClaudeSettings) {
   // The key lives only in the teacher's own browser, so a direct browser call is acceptable here.
-  return new A({ apiKey: c.apiKey.trim(), dangerouslyAllowBrowser: true, timeout: 60_000, maxRetries: 2 });
+  // One SDK retry at most: every retry is another request.
+  return new A({ apiKey: c.apiKey.trim(), dangerouslyAllowBrowser: true, timeout: 60_000, maxRetries: 1 });
 }
 
 /** JSON shape Claude must reply in: only this method's part ids, bonus 0-3. */
@@ -64,6 +74,7 @@ function schema(method: Method) {
 }
 
 function friendlyClaudeError(A: Sdk, e: unknown, model: string): Error {
+  if (e instanceof BudgetError) return e;
   if (e instanceof A.AuthenticationError) return new Error('Claude rejected the API key. Check it in AI scoring settings.');
   if (e instanceof A.PermissionDeniedError) return new Error("Claude refused this key (403). Check the key's permissions in the Anthropic console.");
   if (e instanceof A.NotFoundError) return new Error(`Claude doesn't know the model "${model}". Try ${DEFAULT_CLAUDE_MODEL}.`);
@@ -74,24 +85,33 @@ function friendlyClaudeError(A: Sdk, e: unknown, model: string): Error {
   return e instanceof Error ? e : new Error(String(e));
 }
 
-async function ask(c: ClaudeSettings, method: Method, text: string, signal?: AbortSignal): Promise<string> {
+// Room for 20 short results plus low-effort thinking; also caps what one call can cost.
+const MAX_OUTPUT_TOKENS = 8000;
+
+async function ask(c: ClaudeSettings, roundId: string, method: Method, text: string, signal?: AbortSignal): Promise<string> {
   const model = c.model.trim() || DEFAULT_CLAUDE_MODEL;
+  checkClaudeBudget(roundId, c.perDay, c.perRound);
   const A = await loadSdk();
+  let recorded = false;
   try {
     const response = await client(A, c).beta.messages.create(
       {
         model,
-        max_tokens: 16000,
+        max_tokens: MAX_OUTPUT_TOKENS,
         ...(supportsDefaultFallback(model) ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' as const } : {}),
         output_config: { effort: 'low', format: { type: 'json_schema', schema: schema(method) } },
         messages: [{ role: 'user', content: text }],
       },
       { signal },
     );
+    recordClaudeCall(roundId, model, response.usage.input_tokens, response.usage.output_tokens);
+    recorded = true;
     if (response.stop_reason === 'refusal') throw new Error('Claude declined to score these prompts.');
     if (response.stop_reason === 'max_tokens') throw new Error("Claude's answer was cut off. Try again.");
     return response.content.map((b) => (b.type === 'text' ? b.text : '')).join('');
   } catch (e) {
+    // Count calls that reached Anthropic even when they failed, so a failing key can't loop past the limits.
+    if (!recorded && e instanceof A.APIError && e.status) recordClaudeCall(roundId, model);
     throw friendlyClaudeError(A, e, model);
   }
 }
@@ -99,6 +119,7 @@ async function ask(c: ClaudeSettings, method: Method, text: string, signal?: Abo
 /** Scores prompts with Claude in batches; calls onBatch as each batch arrives. */
 export async function claudeScore(
   c: ClaudeSettings,
+  roundId: string,
   method: Method,
   question: string,
   prompts: { id: string; prompt: string }[],
@@ -107,7 +128,7 @@ export async function claudeScore(
 ) {
   for (let i = 0; i < prompts.length; i += BATCH) {
     const batch = prompts.slice(i, i + BATCH);
-    const raw = await ask(c, method, instructions(method, question, batch), signal);
+    const raw = await ask(c, roundId, method, instructions(method, question, batch), signal);
     const res = parse(raw, method);
     for (const id of Object.keys(res)) res[id].by = 'claude';
     onBatch(res);
@@ -117,6 +138,7 @@ export async function claudeScore(
 /** A tiny request to check the key and model work. */
 export async function claudeTest(c: ClaudeSettings): Promise<void> {
   const model = c.model.trim() || DEFAULT_CLAUDE_MODEL;
+  checkClaudeBudget('test', c.perDay, 1000);
   const A = await loadSdk();
   try {
     const response = await client(A, c).messages.create({
@@ -125,6 +147,7 @@ export async function claudeTest(c: ClaudeSettings): Promise<void> {
       output_config: { effort: 'low' },
       messages: [{ role: 'user', content: 'Reply with the single word OK.' }],
     });
+    recordClaudeCall('test', model, response.usage.input_tokens, response.usage.output_tokens);
     if (!response.content.some((b) => b.type === 'text')) throw new Error('Claude answered, but not as expected.');
   } catch (e) {
     throw friendlyClaudeError(A, e, model);

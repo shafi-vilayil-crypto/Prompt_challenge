@@ -9,6 +9,7 @@ export const aiReady = (g: AiSettings, c: ClaudeSettings) => g.enabled && (gemin
 export async function scoreWithFallback(
   g: AiSettings,
   c: ClaudeSettings,
+  roundId: string,
   method: Method,
   question: string,
   prompts: { id: string; prompt: string }[],
@@ -34,7 +35,7 @@ export async function scoreWithFallback(
   if (!rest.length) return;
   if (!(g.enabled && claudeReady(c))) throw geminiError ?? new Error('Add a Gemini or Claude key in AI scoring.');
   try {
-    await claudeScore(c, method, question, rest, track);
+    await claudeScore(c, roundId, method, question, rest, track);
   } catch (e) {
     const msg = (e as Error).message;
     throw new Error(geminiError ? `Gemini: ${geminiError.message} Claude fallback: ${msg}` : msg);

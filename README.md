@@ -44,6 +44,17 @@ With AI scoring on, a **Claude fallback** card appears. Switch it on, paste an A
 - Default model `claude-opus-5-5` at low effort; `claude-haiku-5-5` is the cheapest. Claude's reply is constrained to a JSON schema that allows only the round's part names and a 0–3 bonus.
 - Claude is paid per use: set a monthly spend limit in the Anthropic console. The key stays in the teacher's browser only, and the Claude SDK is loaded only on the teacher screen.
 
+### Cost limits
+
+Every Claude request costs money, so the app limits them:
+
+- **Calls per day** (default 30) and **calls per round** (default 5) for Claude, set in the Claude fallback card, with today's calls and an estimated cost shown there. One call scores up to 20 prompts; each answer is capped at 8,000 output tokens. Every call that reaches Anthropic counts, even if it failed.
+- **No retry loops:** each prompt is sent to the AI at most twice automatically; after an error, automatic scoring pauses for a minute ("Score with AI" can still try at once). The Claude SDK retries a failed request at most once.
+- **At most 80 prompts per round** go to the AI, so fake submissions can't run up a bill. The rest keep the word check.
+- **No paying twice:** AI results are saved in the teacher's browser per round, so reloading the page doesn't re-score them; only one open teacher tab calls the AI at a time.
+
+These limits live in one browser. The hard backstop is a **monthly spend limit in the Anthropic console** (Settings → Limits). Keep the Gemini key on a Google project without billing, so Gemini stays on the free tier and can never charge.
+
 ## Malayalam and tokens
 
 - The student page and the projector have an **English / മലയാളം** switch. Methods, templates and examples are written in both languages.
