@@ -26,7 +26,7 @@ type Strings = {
   promptsSent: (n: number) => string; scanJoin: string; getReady: string; bestPrompts: string; method: string;
   youreFirst: string; topOfBoard: string; rankLine: (rank: number, of: number) => string; howToWrite: (name: string) => string;
   totalPoints: (n: number) => string; close: string; roundScore: string; sentTitle: string; welcome: (name: string) => string;
-  noPaste: string;
+  noPaste: string; scanToJoin: string; sentSoFar: string; checking: string; roundBest: string; leading: string; promptsWord: (n: number) => string;
 };
 
 export const STRINGS: Record<Lang, Strings> = {
@@ -82,6 +82,12 @@ export const STRINGS: Record<Lang, Strings> = {
     sentTitle: 'Prompt sent!',
     welcome: (name) => `Hi ${name}!`,
     noPaste: 'Pasting is turned off in this game. Type your own prompt.',
+    scanToJoin: 'Scan to join',
+    sentSoFar: 'Sent so far',
+    checking: 'Time is up! Your teacher is checking the prompts…',
+    roundBest: 'Best prompt this round',
+    leading: 'Leading the class',
+    promptsWord: (n) => (n === 1 ? 'prompt sent' : 'prompts sent'),
   },
   ml: {
     whatsName: 'നിങ്ങളുടെ പേര് എന്താണ്?',
@@ -135,5 +141,11 @@ export const STRINGS: Record<Lang, Strings> = {
     sentTitle: 'പ്രോംപ്റ്റ് അയച്ചു!',
     welcome: (name) => `ഹായ് ${name}!`,
     noPaste: 'ഈ കളിയിൽ പേസ്റ്റ് ചെയ്യാൻ കഴിയില്ല. നിങ്ങളുടെ സ്വന്തം പ്രോംപ്റ്റ് ടൈപ്പ് ചെയ്യുക.',
+    scanToJoin: 'ചേരാൻ സ്കാൻ ചെയ്യുക',
+    sentSoFar: 'ഇതുവരെ അയച്ചവർ',
+    checking: 'സമയം കഴിഞ്ഞു! ടീച്ചർ പ്രോംപ്റ്റുകൾ പരിശോധിക്കുന്നു…',
+    roundBest: 'ഈ റൗണ്ടിലെ മികച്ച പ്രോംപ്റ്റ്',
+    leading: 'ക്ലാസിൽ ഒന്നാമത്',
+    promptsWord: () => 'പ്രോംപ്റ്റുകൾ ലഭിച്ചു',
   },
 };

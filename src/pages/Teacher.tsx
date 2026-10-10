@@ -23,6 +23,10 @@ import {
   loadSavedResults, loadUsage, releaseAiLock, saveResults, takeAiLock, type ClaudeUsage,
 } from '../lib/budget';
 import { Brand } from './Student';
+import { RainBackground } from '../components/RainBackground';
+import { Confetti } from '../components/Confetti';
+import { Podium } from '../components/Podium';
+import { TimerRing } from '../components/TimerRing';
 
 type Tab = 'run' | 'screen' | 'questions';
 type Marks = Record<string, { parts: string[]; bonus: number }>;
@@ -810,65 +814,141 @@ function Projector({ round, subs, board }: { round: Round | null; subs: Submissi
   const [lang, setLang] = useLang();
   const t = STRINGS[lang];
   const method: Method | null = round ? getMethod(round.method) : null;
+  const left = useSecondsLeft(round?.ends_at);
   const url = window.location.origin + '/';
   const [qr, setQr] = useState('');
   useEffect(() => {
-    QRCode.toDataURL(url, { margin: 1, width: 480, color: { dark: '#1d3a31', light: '#f4f1e6' } }).then(setQr).catch(() => setQr(''));
+    QRCode.toDataURL(url, { margin: 1, width: 600, color: { dark: '#1d3a31', light: '#f4f1e6' } }).then(setQr).catch(() => setQr(''));
   }, [url]);
 
+  // Confetti once per published round on the big screen.
+  const celebrated = useRef<string | null>(null);
+  const [confetti, setConfetti] = useState(false);
+  useEffect(() => {
+    if (round?.published && board.length && celebrated.current !== round.id) {
+      celebrated.current = round.id;
+      setConfetti(true);
+    }
+  }, [round?.published, round?.id, board.length]);
+
+  const stage = !round ? 'ready' : round.published ? 'results' : left > 0 ? 'live' : 'checking';
   const top3 = round?.published
     ? [...subs].filter((s) => s.score !== null).sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 3)
     : [];
+  const senders = [...subs].sort((a, b) => a.created_at.localeCompare(b.created_at)).slice(-40);
+  const leader = board[0];
 
   return (
-    <div className="projector">
-      <section className="proj-join">
-        {qr && <img className="qr" src={qr} alt={`QR code for ${url}`} />}
-        <p className="proj-url">{url.replace(/^https?:\/\//, '').replace(/\/$/, '')}</p>
-        <p className="muted">{t.scanJoin}</p>
-        <div className="row wrap center">
-          <LangToggle lang={lang} onChange={setLang} />
-          <button className="btn" type="button" onClick={() => document.documentElement.requestFullscreen?.().catch(() => {})}>Full screen</button>
-        </div>
-      </section>
+    <>
+      <RainBackground />
+      {confetti && <Confetti onDone={() => setConfetti(false)} />}
+      <div className="projector">
+        <section className="proj-join">
+          <span className="scan-label">{t.scanToJoin}</span>
+          <div className="qr-frame">{qr && <img className="qr" src={qr} alt={`QR code for ${url}`} />}</div>
+          <p className="proj-url">{url.replace(/^https?:\/\//, '').replace(/\/$/, '')}</p>
+          <p className="muted">{t.scanJoin}</p>
+          <div className="row wrap center">
+            <LangToggle lang={lang} onChange={setLang} />
+            <button className="btn" type="button" onClick={() => document.documentElement.requestFullscreen?.().catch(() => {})}>Full screen</button>
+          </div>
+        </section>
 
-      <section className="proj-main">
-        {!round ? (
-          <h1 className="proj-q">{t.getReady}</h1>
-        ) : (
-          <>
-            <span className="eyebrow">{round.published ? t.results : t.challenge}</span>
-            <h1 className="proj-q">{round.question}</h1>
-            {!round.published && (
-              <div className="row wrap proj-status">
-                <Timer endsAt={round.ends_at} big doneLabel={t.timesUp} />
-                <span className="proj-count">{t.promptsSent(subs.length)}</span>
+        <section className="proj-main" lang={lang}>
+          {stage === 'ready' && (
+            <div className="proj-card proj-hero enter">
+              <div className="bounce-drop big" aria-hidden="true" />
+              <h1 className="proj-q">{t.getReady}</h1>
+            </div>
+          )}
+
+          {(stage === 'live' || stage === 'checking') && round && (
+            <>
+              <div className="proj-card enter">
+                <div className="row between wrap">
+                  <span className="eyebrow">{t.challenge}</span>
+                  {method && <span className="method-pill big-pill">{method.name[lang]}</span>}
+                </div>
+                <h1 className="proj-q">{round.question}</h1>
               </div>
-            )}
-            {!round.published && method && <MethodCard method={method} lang={lang} big />}
-            {top3.length > 0 && (
-              <div className="stack">
-                <span className="eyebrow">{t.bestPrompts}</span>
-                <ol className="top-prompts">
-                  {top3.map((s) => (
-                    <li key={s.id}>
-                      <div className="row between"><strong>{s.name}</strong><span className="sub-score">{s.score}</span></div>
-                      <blockquote className="quote">{s.prompt}</blockquote>
-                      <span className="muted small">{t.tokens(estimateTokens(s.prompt))}</span>
-                      {s.feedback && <p className="ai-comment"><span className="ai-tag">AI</span>{s.feedback}</p>}
-                    </li>
-                  ))}
-                </ol>
+
+              <div className="proj-live enter">
+                <TimerRing startedAt={round.started_at} endsAt={round.ends_at} doneLabel={t.timesUp} huge />
+                <div className="proj-counter">
+                  <span key={subs.length} className="counter-num">{subs.length}</span>
+                  <span className="counter-label">{t.promptsWord(subs.length)}</span>
+                </div>
               </div>
-            )}
-          </>
-        )}
-        <div className="stack">
-          <span className="eyebrow">{t.leaderboard}</span>
-          <Leaderboard rows={board} limit={8} big emptyText={t.boardEmpty} youLabel={t.you} />
-        </div>
-      </section>
-    </div>
+
+              {stage === 'checking' && <p className="proj-banner enter">{t.checking}</p>}
+
+              {senders.length > 0 && (
+                <div className="proj-card enter">
+                  <span className="eyebrow">{t.sentSoFar}</span>
+                  <div className="bubbles">
+                    {senders.map((s) => (
+                      <span key={s.id} className="bubble">
+                        <span className="bubble-avatar">{s.name.trim().charAt(0).toUpperCase() || '?'}</span>
+                        {s.name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {stage === 'live' && method && <MethodCard method={method} lang={lang} big />}
+            </>
+          )}
+
+          {stage === 'results' && round && (
+            <>
+              {leader && (
+                <div className="proj-winner enter">
+                  <svg className="trophy" viewBox="0 0 64 64" width="96" height="96" aria-hidden="true">
+                    <path d="M18 8h28v10a14 14 0 0 1-28 0z" fill="#ffd45c" />
+                    <path d="M18 12H9a9 9 0 0 0 11 13M46 12h9a9 9 0 0 1-11 13" fill="none" stroke="#ffd45c" strokeWidth="4" strokeLinecap="round" />
+                    <path d="M28 31h8v9h-8z" fill="#e8b93a" />
+                    <rect x="20" y="40" width="24" height="6" rx="2" fill="#ffd45c" />
+                    <rect x="16" y="46" width="32" height="8" rx="3" fill="#e8b93a" />
+                    <path d="M32 13l2.4 4.9 5.4.8-3.9 3.8.9 5.3L32 25.3l-4.8 2.5.9-5.3-3.9-3.8 5.4-.8z" fill="#fff6d6" />
+                  </svg>
+                  <div className="stack tight">
+                    <span className="eyebrow">{t.leading}</span>
+                    <span className="winner-big-name">{leader.name}</span>
+                    <span className="winner-points">{t.totalPoints(leader.total)}</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="proj-card enter">
+                <span className="eyebrow">{t.leaderboard}</span>
+                <Podium rows={board} youLabel={t.you} />
+                {board.length > 3 && <Leaderboard rows={board} limit={10} skip={3} big emptyText={t.boardEmpty} youLabel={t.you} />}
+              </div>
+
+              {top3.length > 0 && (
+                <div className="proj-card enter">
+                  <span className="eyebrow">{t.bestPrompts}</span>
+                  <h2 className="proj-sub">{round.question}</h2>
+                  <ol className="top-prompts">
+                    {top3.map((s, i) => (
+                      <li key={s.id} className={i === 0 ? 'best' : ''}>
+                        <div className="row between">
+                          <strong className="tp-name"><span className={`tp-rank r${i + 1}`}>{i + 1}</span>{s.name}</strong>
+                          <span className="sub-score">{s.score}</span>
+                        </div>
+                        <blockquote className="quote">{s.prompt}</blockquote>
+                        {s.feedback && <p className="ai-comment"><span className="ai-tag">AI</span>{s.feedback}</p>}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      </div>
+    </>
   );
 }
 
