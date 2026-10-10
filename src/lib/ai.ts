@@ -9,7 +9,7 @@ export const DEFAULT_MODEL = 'gemini-2.5-flash';
 const BATCH = 15; // prompts per Gemini call
 
 export type AiSettings = { enabled: boolean; apiKey: string; model: string };
-export type AiResult = { parts: string[]; bonus: number; comment: string };
+export type AiResult = { parts: string[]; bonus: number; comment: string; by?: 'gemini' | 'claude' };
 
 export function loadAi(): AiSettings {
   try {
@@ -23,9 +23,9 @@ export function saveAi(s: AiSettings) {
   try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* private mode: works for this visit */ }
 }
 
-export const aiReady = (s: AiSettings) => s.enabled && s.apiKey.trim().length > 10;
+export const geminiReady = (s: AiSettings) => s.enabled && s.apiKey.trim().length > 10;
 
-function instructions(method: Method, question: string, prompts: { id: string; prompt: string }[]) {
+export function instructions(method: Method, question: string, prompts: { id: string; prompt: string }[]) {
   const parts = method.parts.map((p) => `- ${p.id}: ${p.label.en} (${p.hint.en})`).join('\n');
   return `You judge a classroom game. School students in Kerala, India (age 11-14) write prompts for an AI.
 
@@ -101,7 +101,7 @@ async function callGeminiOnce(s: AiSettings, text: string, signal?: AbortSignal)
   return out;
 }
 
-function parse(raw: string, method: Method): Record<string, AiResult> {
+export function parse(raw: string, method: Method): Record<string, AiResult> {
   const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
   let json: { results?: unknown };
   try { json = JSON.parse(cleaned); } catch { throw new Error("Gemini's answer wasn't valid JSON. Try again."); }

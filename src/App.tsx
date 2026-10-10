@@ -1,6 +1,9 @@
 import { configured } from './lib/supabase';
+import { Suspense, lazy } from 'react';
 import Student, { Brand } from './pages/Student';
-import Teacher from './pages/Teacher';
+
+// The teacher screens (QR code, AI scoring) load only on /teacher, so students' phones download less.
+const Teacher = lazy(() => import('./pages/Teacher'));
 
 export default function App() {
   if (!configured) {
@@ -17,5 +20,11 @@ export default function App() {
       </main>
     );
   }
-  return window.location.pathname.replace(/\/+$/, '') === '/teacher' ? <Teacher /> : <Student />;
+  return window.location.pathname.replace(/\/+$/, '') === '/teacher' ? (
+    <Suspense fallback={<main className="page narrow"><p className="muted">Loading…</p></main>}>
+      <Teacher />
+    </Suspense>
+  ) : (
+    <Student />
+  );
 }

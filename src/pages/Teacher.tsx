@@ -15,7 +15,9 @@ import { LangToggle } from '../components/LangToggle';
 import { Timer } from '../components/Timer';
 import { Leaderboard } from '../components/Leaderboard';
 import { PartChips } from '../components/PartChips';
-import { DEFAULT_MODEL, aiReady, aiScore, aiTest, loadAi, saveAi, type AiResult, type AiSettings } from '../lib/ai';
+import { DEFAULT_MODEL, aiTest, loadAi, saveAi, type AiResult, type AiSettings } from '../lib/ai';
+import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL, claudeTest, loadClaude, saveClaude, type ClaudeSettings } from '../lib/claude';
+import { aiReady, scoreWithFallback } from '../lib/scorer';
 import { Brand } from './Student';
 
 type Tab = 'run' | 'screen' | 'questions';
@@ -124,7 +126,9 @@ function Console() {
   const open = Boolean(round && !round.published && left > 0);
   const [ai, setAiState] = useState<AiSettings>(loadAi);
   const setAi = (next: AiSettings) => { saveAi(next); setAiState(next); };
-  const aiState = useAi(round, subs, open, ai);
+  const [claude, setClaudeState] = useState<ClaudeSettings>(loadClaude);
+  const setClaude = (next: ClaudeSettings) => { saveClaude(next); setClaudeState(next); };
+  const aiState = useAi(round, subs, open, ai, claude);
   const scoring = useMarks(round, subs, aiState.results);
 
   return (
@@ -141,7 +145,7 @@ function Console() {
       </Brand>
       {offline && <p className="banner">Can't reach Supabase. Check the internet; it retries every 2 seconds.</p>}
       {tab === 'run' && (
-        <Run round={round} subs={subs} board={board} refresh={refresh} open={open} ai={ai} setAi={setAi} aiState={aiState} scoring={scoring} />
+        <Run round={round} subs={subs} board={board} refresh={refresh} open={open} ai={ai} setAi={setAi} claude={claude} setClaude={setClaude} aiState={aiState} scoring={scoring} />
       )}
       {tab === 'screen' && <Projector round={round} subs={subs} board={board} />}
       {tab === 'questions' && <Questions />}
@@ -155,22 +159,22 @@ const LIVE_EVERY_MS = 10_000;
 
 type AiState = { results: Record<string, AiResult>; busy: boolean; error: string; run: (onlyUntried: boolean) => Promise<void> };
 
-/** Gemini scoring for the current round. Runs by itself when the round closes (if AI is on). */
-function useAi(round: Round | null, subs: Submission[], open: boolean, ai: AiSettings): AiState {
+/** AI scoring for the current round: Gemini first, Claude as the fallback. Runs live while the round is open. */
+function useAi(round: Round | null, subs: Submission[], open: boolean, ai: AiSettings, claude: ClaudeSettings): AiState {
   const [results, setResults] = useState<Record<string, AiResult>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const tried = useRef(new Set<string>()); // prompts already sent automatically
   const busyRef = useRef(false);
-  const latest = useRef({ round, subs, ai, results });
-  latest.current = { round, subs, ai, results };
+  const latest = useRef({ round, subs, ai, claude, results });
+  latest.current = { round, subs, ai, claude, results };
   const roundId = round?.id;
 
   useEffect(() => { setResults({}); setError(''); tried.current = new Set(); }, [roundId]);
 
   const run = useCallback(async (onlyUntried: boolean) => {
-    const { round, subs, ai, results } = latest.current;
-    if (!round || !aiReady(ai) || busyRef.current) return;
+    const { round, subs, ai, claude, results } = latest.current;
+    if (!round || !aiReady(ai, claude) || busyRef.current) return;
     const todo = subs.filter((x) => !results[x.id] && (!onlyUntried || !tried.current.has(x.id)));
     if (!todo.length) return;
     todo.forEach((x) => tried.current.add(x.id));
@@ -179,7 +183,7 @@ function useAi(round: Round | null, subs: Submission[], open: boolean, ai: AiSet
     setError('');
     const rid = round.id;
     try {
-      await aiScore(ai, getMethod(round.method), round.question, todo.map((x) => ({ id: x.id, prompt: x.prompt })), (res) => {
+      await scoreWithFallback(ai, claude, getMethod(round.method), round.question, todo.map((x) => ({ id: x.id, prompt: x.prompt })), (res) => {
         if (latest.current.round?.id === rid) setResults((r) => ({ ...r, ...res }));
       });
     } catch (e) {
@@ -193,20 +197,20 @@ function useAi(round: Round | null, subs: Submission[], open: boolean, ai: AiSet
     }
   }, []);
 
-  // Live scoring: while the round is open, send new prompts to Gemini in one batch every 10 seconds
+  // Live scoring: while the round is open, send new prompts to the AI in one batch every 10 seconds
   // (a few calls a minute however many students there are), and once more when the round closes.
   useEffect(() => {
-    if (!round || round.published || !aiReady(ai)) return;
+    if (!round || round.published || !aiReady(ai, claude)) return;
     if (!open) { run(true); return; }
     run(true);
     const t = setInterval(() => run(true), LIVE_EVERY_MS);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roundId, open, round?.published, ai.enabled, ai.apiKey]);
+  }, [roundId, open, round?.published, ai.enabled, ai.apiKey, claude.enabled, claude.apiKey]);
 
   // After the round closes, late prompts (or ones that failed) are picked up as they appear.
   useEffect(() => {
-    if (round && !open && !round.published && aiReady(ai)) run(true);
+    if (round && !open && !round.published && aiReady(ai, claude)) run(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subs.length]);
 
@@ -216,7 +220,7 @@ function useAi(round: Round | null, subs: Submission[], open: boolean, ai: AiSet
 type Mark = { parts: string[]; bonus: number };
 type ScoringState = { marks: Marks; update: (id: string, fn: (m: Mark) => Mark) => void; dirty: boolean; setDirty: (d: boolean) => void };
 
-/** The teacher's marks per prompt: saved marks, else Gemini's, else the word check. Hand edits always win. */
+/** The teacher's marks per prompt: saved marks, else the AI's, else the word check. Hand edits always win. */
 function useMarks(round: Round | null, subs: Submission[], aiResults: Record<string, AiResult>): ScoringState {
   const [marks, setMarks] = useState<Marks>({});
   const [dirty, setDirty] = useState(false);
@@ -229,7 +233,7 @@ function useMarks(round: Round | null, subs: Submission[], aiResults: Record<str
   useEffect(() => {
     if (!round) return;
     const method = getMethod(round.method);
-    // Gemini results not applied yet (and not overridden by hand): decided here, outside the state update.
+    // AI results not applied yet (and not overridden by hand): decided here, outside the state update.
     const fromAi = subs.filter((s) => aiResults[s.id] && !applied.current.has(s.id) && !touched.current.has(s.id));
     fromAi.forEach((s) => applied.current.add(s.id));
     if (fromAi.length) setDirty(true);
@@ -264,10 +268,11 @@ function useMarks(round: Round | null, subs: Submission[], aiResults: Record<str
 
 type RunProps = {
   round: Round | null; subs: Submission[]; board: LeaderRow[]; refresh: () => Promise<void>; open: boolean;
-  ai: AiSettings; setAi: (s: AiSettings) => void; aiState: AiState; scoring: ScoringState;
+  ai: AiSettings; setAi: (s: AiSettings) => void; claude: ClaudeSettings; setClaude: (s: ClaudeSettings) => void;
+  aiState: AiState; scoring: ScoringState;
 };
 
-function Run({ round, subs, board, refresh, open, ai, setAi, aiState, scoring }: RunProps) {
+function Run({ round, subs, board, refresh, open, ai, setAi, claude, setClaude, aiState, scoring }: RunProps) {
 
   return (
     <div className="grid-2">
@@ -284,12 +289,13 @@ function Run({ round, subs, board, refresh, open, ai, setAi, aiState, scoring }:
           </section>
         )}
         {round && (round.published || !open || subs.length > 0) && (
-          <Scoring key={round.id} round={round} subs={subs} refresh={refresh} open={open} ai={ai} aiState={aiState} scoring={scoring} />
+          <Scoring key={round.id} round={round} subs={subs} refresh={refresh} open={open} aiOn={aiReady(ai, claude)} aiState={aiState} scoring={scoring} />
         )}
         <StartRound open={open} refresh={refresh} />
       </div>
       <div className="stack">
         <AiSettingsCard ai={ai} setAi={setAi} />
+        {ai.enabled && <ClaudeCard claude={claude} setClaude={setClaude} />}
         <section className="card stack">
           <h2>Leaderboard</h2>
           <Leaderboard rows={board} limit={50} />
@@ -399,8 +405,8 @@ function StartRound({ open, refresh }: { open: boolean; refresh: () => Promise<v
   );
 }
 
-function Scoring({ round, subs, refresh, open, ai, aiState, scoring }: {
-  round: Round; subs: Submission[]; refresh: () => Promise<void>; open: boolean; ai: AiSettings; aiState: AiState; scoring: ScoringState;
+function Scoring({ round, subs, refresh, open, aiOn, aiState, scoring }: {
+  round: Round; subs: Submission[]; refresh: () => Promise<void>; open: boolean; aiOn: boolean; aiState: AiState; scoring: ScoringState;
 }) {
   const method = getMethod(round.method);
   const max = method.parts.length * 2;
@@ -409,8 +415,7 @@ function Scoring({ round, subs, refresh, open, ai, aiState, scoring }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
-  const [armed, setArmed] = useState(false); // second tap needed to publish without Gemini
-  const aiOn = aiReady(ai);
+  const [armed, setArmed] = useState(false); // second tap needed to publish without AI scores
   const scoredByAi = (s: Submission) => Boolean(aiState.results[s.id] || s.feedback);
   const pending = subs.filter((s) => !scoredByAi(s)).length;
 
@@ -445,20 +450,20 @@ function Scoring({ round, subs, refresh, open, ai, aiState, scoring }: {
     const { error } = await supabase.rpc('end_round', { p_round: round.id });
     setBusy(false);
     if (error) setError(friendly(error));
-    await refresh(); // Gemini starts by itself once the round is closed
+    await refresh(); // the AI picks up any remaining prompts once the round is closed
   }
 
-  // What the main button does depends on the round and on Gemini.
+  // What the main button does depends on the round and on the AI.
   let action: { label: string; onClick: () => void; disabled?: boolean } ;
   if (round.published) {
     action = { label: dirty ? 'Update published scores' : 'Scores published', onClick: publish, disabled: !dirty };
   } else if (aiOn && open) {
     action = { label: 'End the round now', onClick: endRound };
   } else if (aiOn && aiState.busy) {
-    action = { label: `Gemini is scoring… (${pending} left)`, onClick: () => {}, disabled: true };
+    action = { label: `AI is scoring… (${pending} left)`, onClick: () => {}, disabled: true };
   } else if (aiOn && pending > 0) {
     action = armed
-      ? { label: `Tap again to publish ${pending} without Gemini`, onClick: publish }
+      ? { label: `Tap again to publish ${pending} without AI`, onClick: publish }
       : { label: 'Publish scores to everyone', onClick: () => { setArmed(true); setTimeout(() => setArmed(false), 5000); } };
   } else {
     action = { label: 'Publish scores to everyone', onClick: publish };
@@ -471,16 +476,16 @@ function Scoring({ round, subs, refresh, open, ai, aiState, scoring }: {
       <div className="row between wrap">
         <h2>Score the prompts</h2>
         <span className="muted small">
-          {method.name.en} · {aiOn ? 'Gemini checks each prompt against the question' : 'word check only (AI scoring is off)'}. Tap a part to change it.
+          {method.name.en} · {aiOn ? 'AI checks each prompt against the question' : 'word check only (AI scoring is off)'}. Tap a part to change it.
         </span>
       </div>
       {aiOn && (
         <div className="row wrap">
           <button className="btn" type="button" disabled={aiState.busy || pending === 0} onClick={() => aiState.run(false)}>
-            {aiState.busy ? 'Gemini is scoring…' : 'Score with AI'}
+            {aiState.busy ? 'AI is scoring…' : 'Score with AI'}
           </button>
           <span className="muted small">
-            {`${subs.length - pending} of ${subs.length} scored by Gemini.`}{open ? ' New prompts are scored every 10 seconds.' : ''}
+            {`${subs.length - pending} of ${subs.length} scored by AI.`}{open ? ' New prompts are scored every 10 seconds.' : ''}
           </span>
         </div>
       )}
@@ -498,9 +503,14 @@ function Scoring({ round, subs, refresh, open, ai, aiState, scoring }: {
               <blockquote className="quote">{s.prompt}</blockquote>
               <span className="muted small">≈ {estimateTokens(s.prompt)} tokens</span>
               {aiState.results[s.id]?.comment || s.feedback ? (
-                <p className="ai-comment"><span className="ai-tag">Gemini</span>{aiState.results[s.id]?.comment || s.feedback}</p>
+                <p className="ai-comment">
+                  <span className={`ai-tag${aiState.results[s.id]?.by === 'claude' ? ' claude' : ''}`}>
+                    {aiState.results[s.id]?.by === 'claude' ? 'Claude' : aiState.results[s.id] ? 'Gemini' : 'AI'}
+                  </span>
+                  {aiState.results[s.id]?.comment || s.feedback}
+                </p>
               ) : (
-                <span className="word-tag">{aiOn && aiState.busy ? 'Gemini is reading this…' : 'Word check only'}</span>
+                <span className="word-tag">{aiOn && aiState.busy ? 'AI is reading this…' : 'Word check only'}</span>
               )}
               <PartChips
                 method={method}
@@ -578,7 +588,7 @@ function AiSettingsCard({ ai, setAi }: { ai: AiSettings; setAi: (s: AiSettings) 
       </div>
       <p className="muted small">
         {ai.enabled
-          ? 'Gemini reads each prompt when the round ends, ticks the parts, suggests a bonus and writes a short comment. You can still change everything before publishing.'
+          ? 'AI reads each prompt as it arrives, ticks the parts, suggests a bonus and writes a short comment. Gemini goes first; Claude takes over if Gemini fails. You can still change everything before publishing.'
           : 'Off: prompts are scored by the word check only.'}
       </p>
       {ai.enabled && (
@@ -598,6 +608,73 @@ function AiSettingsCard({ ai, setAi }: { ai: AiSettings; setAi: (s: AiSettings) 
           <p className="muted small">
             Get a free key at <a className="link-inline" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.
             The key stays in this browser only. Students never see it.
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+
+function ClaudeCard({ claude, setClaude }: { claude: ClaudeSettings; setClaude: (c: ClaudeSettings) => void }) {
+  const [key, setKey] = useState(claude.apiKey);
+  const [model, setModel] = useState(claude.model);
+  const [show, setShow] = useState(false);
+  const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testing, setTesting] = useState(false);
+
+  async function saveAndTest() {
+    const next = { ...claude, apiKey: key.trim(), model: model.trim() || DEFAULT_CLAUDE_MODEL };
+    setClaude(next);
+    setTesting(true);
+    setStatus(null);
+    try {
+      await claudeTest(next);
+      setStatus({ ok: true, text: `Saved. Claude (${next.model}) is working.` });
+    } catch (e) {
+      setStatus({ ok: false, text: (e as Error).message });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  return (
+    <section className="card stack">
+      <div className="row between">
+        <h2>Claude fallback</h2>
+        <button
+          type="button"
+          className={`switch${claude.enabled ? ' on' : ''}`}
+          role="switch"
+          aria-checked={claude.enabled}
+          aria-label="Claude fallback"
+          onClick={() => setClaude({ ...claude, enabled: !claude.enabled })}
+        >
+          <span className="switch-knob" />
+          <span className="switch-text">{claude.enabled ? 'On' : 'Off'}</span>
+        </button>
+      </div>
+      <p className="muted small">
+        {claude.enabled
+          ? 'When Gemini is busy, rate-limited or fails, Claude scores the remaining prompts. With no Gemini key, Claude scores everything. Claude is paid per use.'
+          : 'Off: if Gemini fails, the word check scores stay.'}
+      </p>
+      {claude.enabled && (
+        <>
+          <label className="label" htmlFor="claude-key">Anthropic API key</label>
+          <div className="row">
+            <input id="claude-key" className="input" type={show ? 'text' : 'password'} autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-ant-…" />
+            <button className="btn small" type="button" onClick={() => setShow((v) => !v)}>{show ? 'Hide' : 'Show'}</button>
+          </div>
+          <label className="label" htmlFor="claude-model">Model</label>
+          <input id="claude-model" className="input" list="claude-models" value={model} onChange={(e) => setModel(e.target.value)} placeholder={DEFAULT_CLAUDE_MODEL} />
+          <datalist id="claude-models">{CLAUDE_MODELS.map((m) => <option key={m} value={m} />)}</datalist>
+          <button className="btn primary" type="button" disabled={testing || key.trim().length < 20} onClick={saveAndTest}>
+            {testing ? 'Testing…' : 'Save and test'}
+          </button>
+          {status && <p className={status.ok ? 'success' : 'error'} role="status">{status.text}</p>}
+          <p className="muted small">
+            Get a key at <a className="link-inline" href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a> and set a monthly spend limit there.
+            The key stays in this browser only. claude-haiku-5-5 is the cheapest model.
           </p>
         </>
       )}
@@ -683,7 +760,7 @@ function Projector({ round, subs, board }: { round: Round | null; subs: Submissi
                       <div className="row between"><strong>{s.name}</strong><span className="sub-score">{s.score}</span></div>
                       <blockquote className="quote">{s.prompt}</blockquote>
                       <span className="muted small">{t.tokens(estimateTokens(s.prompt))}</span>
-                      {s.feedback && <p className="ai-comment"><span className="ai-tag">Gemini</span>{s.feedback}</p>}
+                      {s.feedback && <p className="ai-comment"><span className="ai-tag">AI</span>{s.feedback}</p>}
                     </li>
                   ))}
                 </ol>

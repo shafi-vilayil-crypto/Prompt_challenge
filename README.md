@@ -35,6 +35,15 @@ In **Run the game → AI scoring**, the teacher switches AI on and pastes a free
 - Students see the comment with their score after publishing. This needs [`supabase/003_ai_feedback.sql`](supabase/003_ai_feedback.sql) on projects set up before this update.
 - The key is kept only in the teacher's browser, and Gemini is called from the teacher's screen only. Students' phones never contact Gemini. The free tier allows a few requests per minute; prompts are sent 15 at a time.
 
+### Claude fallback (optional)
+
+With AI scoring on, a **Claude fallback** card appears. Switch it on, paste an Anthropic API key from [console.anthropic.com](https://console.anthropic.com/settings/keys) and press **Save and test**.
+
+- When Gemini is busy, rate-limited or fails (after its own retries), the prompts it couldn't score go to Claude. With no Gemini key, Claude scores everything.
+- Each card's comment is tagged **Gemini** or **Claude**.
+- Default model `claude-opus-5-5` at low effort; `claude-haiku-5-5` is the cheapest. Claude's reply is constrained to a JSON schema that allows only the round's part names and a 0–3 bonus.
+- Claude is paid per use: set a monthly spend limit in the Anthropic console. The key stays in the teacher's browser only, and the Claude SDK is loaded only on the teacher screen.
+
 ## Malayalam and tokens
 
 - The student page and the projector have an **English / മലയാളം** switch. Methods, templates and examples are written in both languages.

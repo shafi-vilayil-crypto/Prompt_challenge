@@ -190,3 +190,4 @@ button.chip { cursor: pointer; }
 .feedback-box { background: var(--board); border-left: 3px solid var(--sky); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
 .link-inline { color: var(--sky); font-weight: 700; }
 .word-tag { align-self: flex-start; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--chalk-dim); border: 1px dashed var(--line); border-radius: 6px; padding: 2px 8px; }
+.ai-tag.claude { background: #f0a37a; }
