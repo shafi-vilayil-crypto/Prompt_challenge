@@ -52,10 +52,23 @@ class GeminiError extends Error {
   constructor(message: string, public status: number) { super(message); }
 }
 
-/** AI Studio keys start with "AIza". Others (Vertex AI / Google Cloud keys, often "AQ.") don't work with this API. */
-export const looksLikeStudioKey = (key: string) => key.trim().startsWith('AIza');
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Calls Gemini, retrying twice (after 2 s and 5 s) when the model is busy (503) or has a server error (500). */
 async function callGemini(s: AiSettings, text: string, signal?: AbortSignal): Promise<string> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await callGeminiOnce(s, text, signal);
+    } catch (e) {
+      const busy = e instanceof GeminiError && (e.status === 503 || e.status === 500);
+      if (!busy || attempt >= 2) throw e;
+      await sleep(attempt === 0 ? 2000 : 5000);
+    }
+  }
+}
+
+async function callGeminiOnce(s: AiSettings, text: string, signal?: AbortSignal): Promise<string> {
   const model = encodeURIComponent(s.model.trim() || DEFAULT_MODEL);
   let res: Response;
   try {
@@ -79,6 +92,7 @@ async function callGemini(s: AiSettings, text: string, signal?: AbortSignal): Pr
     if (res.status === 403) throw new GeminiError('Gemini refused the key (403). Check the key and that the Gemini API is enabled for it.', 403);
     if (res.status === 404) throw new GeminiError(`Your key can't use the model "${s.model}". Press "Save and test" in AI scoring to pick one it can use.`, 404);
     if (res.status === 429) throw new GeminiError('Gemini rate limit reached. Wait a minute, then press "Score with AI" again.', 429);
+    if (res.status === 503) throw new GeminiError('Gemini is very busy right now. Press "Score with AI" again in a minute; the word check scores are kept meanwhile.', 503);
     throw new GeminiError(`Gemini error ${res.status}${msg ? `: ${msg}` : ''}`, res.status);
   }
   const data = await res.json();
@@ -166,18 +180,21 @@ export async function aiTest(s: AiSettings): Promise<{ model: string; switched: 
   }
   const candidates = [...(available.includes(wanted) ? [wanted] : []), ...ranked];
   if (!candidates.length) throw new Error('This key has no Gemini text models available. Check the key in Google AI Studio.');
+  let lastError: Error | null = null;
   for (const model of candidates) {
     try {
       const raw = await callGemini({ ...s, model }, 'Reply with JSON only: {"ok":true}');
       if (!/ok/.test(raw)) throw new Error('Gemini answered, but not as expected.');
       return { model, switched: model !== wanted, available };
     } catch (e) {
-      if (!(e instanceof GeminiError && e.status === 404)) throw e;
+      // Not available for this key, or still busy after retries: try the next model.
+      if (!(e instanceof GeminiError && (e.status === 404 || e.status === 503 || e.status === 500))) throw e;
+      lastError = e as Error;
     }
   }
-  throw new Error(
-    looksLikeStudioKey(s.apiKey)
-      ? "Gemini lists models for this key but won't run any of them. Create a new key at aistudio.google.com/apikey."
-      : 'This key can\'t run Gemini models here. It doesn\'t look like a Google AI Studio key (those start with "AIza"). Create one at aistudio.google.com/apikey.',
-  );
+  if (lastError instanceof GeminiError && lastError.status === 404) {
+    throw new Error('None of the Gemini models would run with this key. Create a new key at aistudio.google.com/apikey.');
+  }
+  throw lastError ?? new Error('No Gemini model answered. Try again in a minute.');
 }
+
