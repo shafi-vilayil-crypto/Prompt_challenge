@@ -24,6 +24,8 @@ type Strings = {
   boardEmpty: string; you: string; timesUp: string; partsLabel: string;
   verdict: (score: number, max: number) => string; tokens: (n: number) => string; tokensHelp: string;
   promptsSent: (n: number) => string; scanJoin: string; getReady: string; bestPrompts: string; method: string;
+  youreFirst: string; topOfBoard: string; rankLine: (rank: number, of: number) => string; howToWrite: (name: string) => string;
+  totalPoints: (n: number) => string; close: string; roundScore: string; sentTitle: string; welcome: (name: string) => string;
 };
 
 export const STRINGS: Record<Lang, Strings> = {
@@ -69,6 +71,15 @@ export const STRINGS: Record<Lang, Strings> = {
     getReady: 'Get ready! The first challenge starts soon.',
     bestPrompts: 'Best prompts this round',
     method: 'Method',
+    youreFirst: "You're #1!",
+    topOfBoard: 'You are at the top of the leaderboard. Brilliant prompting!',
+    rankLine: (r, n) => `You are #${r} of ${n}`,
+    howToWrite: (name) => `How to write it: ${name}`,
+    totalPoints: (n) => `${n} points in total`,
+    close: 'Yay!',
+    roundScore: 'Your score this round',
+    sentTitle: 'Prompt sent!',
+    welcome: (name) => `Hi ${name}!`,
   },
   ml: {
     whatsName: 'നിങ്ങളുടെ പേര് എന്താണ്?',
@@ -112,5 +123,14 @@ export const STRINGS: Record<Lang, Strings> = {
     getReady: 'തയ്യാറാകൂ! ആദ്യ ചലഞ്ച് ഉടൻ തുടങ്ങും.',
     bestPrompts: 'ഈ റൗണ്ടിലെ മികച്ച പ്രോംപ്റ്റുകൾ',
     method: 'രീതി',
+    youreFirst: 'നിങ്ങൾ ഒന്നാമത്!',
+    topOfBoard: 'സ്കോർ പട്ടികയിൽ നിങ്ങളാണ് ഏറ്റവും മുകളിൽ. മികച്ച പ്രോംപ്റ്റിംഗ്!',
+    rankLine: (r, n) => `${n} പേരിൽ നിങ്ങൾ #${r}`,
+    howToWrite: (name) => `എങ്ങനെ എഴുതാം: ${name}`,
+    totalPoints: (n) => `ആകെ ${n} പോയിന്റ്`,
+    close: 'അടിപൊളി!',
+    roundScore: 'ഈ റൗണ്ടിലെ നിങ്ങളുടെ സ്കോർ',
+    sentTitle: 'പ്രോംപ്റ്റ് അയച്ചു!',
+    welcome: (name) => `ഹായ് ${name}!`,
   },
 };

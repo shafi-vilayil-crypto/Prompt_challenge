@@ -1,11 +1,11 @@
 import type { LeaderRow } from '../lib/supabase';
 
-type Props = { rows: LeaderRow[]; highlight?: string; limit?: number; big?: boolean; emptyText?: string; youLabel?: string };
+type Props = { rows: LeaderRow[]; highlight?: string; limit?: number; big?: boolean; emptyText?: string; youLabel?: string; skip?: number };
 
-export function Leaderboard({ rows, highlight, limit = 10, big, emptyText = 'Scores appear here after the teacher publishes the first round.', youLabel = 'You' }: Props) {
+export function Leaderboard({ rows, highlight, limit = 10, big, emptyText = 'Scores appear here after the teacher publishes the first round.', youLabel = 'You', skip = 0 }: Props) {
   if (!rows.length) return <p className="muted">{emptyText}</p>;
   const top = Math.max(1, rows[0].total);
-  const shown = rows.slice(0, limit);
+  const shown = rows.slice(skip, limit); // skip: rows already shown elsewhere (the podium)
   const mine = highlight ? rows.findIndex((r) => r.player_id === highlight) : -1;
   const rankOf = (r: LeaderRow) => 1 + rows.filter((o) => o.total > r.total).length;
 
@@ -14,7 +14,7 @@ export function Leaderboard({ rows, highlight, limit = 10, big, emptyText = 'Sco
       {shown.map((r) => (
         <Row key={r.player_id} r={r} rank={rankOf(r)} top={top} me={r.player_id === highlight} youLabel={youLabel} />
       ))}
-      {mine >= limit && (
+      {mine >= limit && mine >= skip && (
         <>
           <li className="board-gap" aria-hidden="true">⋯</li>
           <Row r={rows[mine]} rank={rankOf(rows[mine])} top={top} me youLabel={youLabel} />

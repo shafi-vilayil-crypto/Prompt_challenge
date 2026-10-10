@@ -87,11 +87,27 @@ async function callGeminiOnce(s: AiSettings, text: string, signal?: AbortSignal)
   }
   if (!res.ok) {
     let msg = '';
-    try { msg = (await res.json())?.error?.message ?? ''; } catch { /* ignore */ }
+    let details: { quotaId?: string; retryDelay?: string }[] = [];
+    try {
+      const err = (await res.json())?.error ?? {};
+      msg = err.message ?? '';
+      // Google lists which quota ran out (per minute or per day) and when to retry.
+      details = (err.details ?? []).flatMap((d: { violations?: { quotaId?: string }[]; retryDelay?: string }) =>
+        [...(d.violations ?? []), ...(d.retryDelay ? [{ retryDelay: d.retryDelay }] : [])]);
+    } catch { /* ignore */ }
     if (res.status === 400 && /api key/i.test(msg)) throw new GeminiError('Gemini rejected the API key. Check it in AI scoring settings.', 400);
     if (res.status === 403) throw new GeminiError('Gemini refused the key (403). Check the key and that the Gemini API is enabled for it.', 403);
     if (res.status === 404) throw new GeminiError(`Your key can't use the model "${s.model}". Press "Save and test" in AI scoring to pick one it can use.`, 404);
-    if (res.status === 429) throw new GeminiError('Gemini rate limit reached. Wait a minute, then press "Score with AI" again.', 429);
+    if (res.status === 429) {
+      const perDay = details.some((d) => /PerDay/i.test(d.quotaId ?? '')) || /per day|daily/i.test(msg);
+      const wait = details.find((d) => d.retryDelay)?.retryDelay?.replace(/\.\d+s$/, 's');
+      throw new GeminiError(
+        perDay
+          ? `Gemini's free daily limit for "${s.model}" is used up (it resets at midnight Pacific time, around 12:30–1:30 pm in India). Another Gemini model or the Claude fallback can take over.`
+          : `Gemini's per-minute limit for "${s.model}" was reached. Try again in ${wait ?? 'a minute'}.`,
+        429,
+      );
+    }
     if (res.status === 503) throw new GeminiError('Gemini is very busy right now. Press "Score with AI" again in a minute; the word check scores are kept meanwhile.', 503);
     throw new GeminiError(`Gemini error ${res.status}${msg ? `: ${msg}` : ''}`, res.status);
   }
@@ -130,9 +146,33 @@ export async function aiScore(
 ) {
   for (let i = 0; i < prompts.length; i += BATCH) {
     const batch = prompts.slice(i, i + BATCH);
-    const raw = await callGemini(s, instructions(method, question, batch), signal);
+    const raw = await callWithModelFallback(s, instructions(method, question, batch), signal);
     onBatch(parse(raw, method));
   }
+}
+
+// Each Gemini model has its own free quota. When the chosen one is rate-limited, busy or unavailable,
+// try up to two lighter models, and keep using the one that worked for the next 10 minutes.
+const ALT_MODELS = ['gemini-flash-lite-latest', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
+let sticky: { from: string; to: string; until: number } | null = null;
+const switchable = (e: unknown) => e instanceof GeminiError && [404, 429, 500, 503].includes(e.status);
+
+async function callWithModelFallback(s: AiSettings, text: string, signal?: AbortSignal): Promise<string> {
+  const chosen = s.model.trim() || DEFAULT_MODEL;
+  const first = sticky && sticky.from === chosen && sticky.until > Date.now() ? sticky.to : chosen;
+  const chain = [first, ...[chosen, ...ALT_MODELS].filter((m) => m !== first)].slice(0, 3);
+  let lastError: unknown = null;
+  for (const model of chain) {
+    try {
+      const out = await callGemini({ ...s, model }, text, signal);
+      sticky = model === chosen ? null : { from: chosen, to: model, until: Date.now() + 10 * 60_000 };
+      return out;
+    } catch (e) {
+      if (!switchable(e)) throw e;
+      lastError = e;
+    }
+  }
+  throw lastError;
 }
 
 /** Models this key can use for text generation, without the "models/" prefix. */
@@ -187,8 +227,8 @@ export async function aiTest(s: AiSettings): Promise<{ model: string; switched: 
       if (!/ok/.test(raw)) throw new Error('Gemini answered, but not as expected.');
       return { model, switched: model !== wanted, available };
     } catch (e) {
-      // Not available for this key, or still busy after retries: try the next model.
-      if (!(e instanceof GeminiError && (e.status === 404 || e.status === 503 || e.status === 500))) throw e;
+      // Not available for this key, out of free quota, or still busy after retries: try the next model.
+      if (!switchable(e)) throw e;
       lastError = e as Error;
     }
   }
