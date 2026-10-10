@@ -151,6 +151,8 @@ function Console() {
 
 // ───────────── Scoring state (kept here so it survives switching tabs) ─────────────
 
+const LIVE_EVERY_MS = 10_000;
+
 type AiState = { results: Record<string, AiResult>; busy: boolean; error: string; run: (onlyUntried: boolean) => Promise<void> };
 
 /** Gemini scoring for the current round. Runs by itself when the round closes (if AI is on). */
@@ -182,16 +184,31 @@ function useAi(round: Round | null, subs: Submission[], open: boolean, ai: AiSet
       });
     } catch (e) {
       setError((e as Error).message);
+      // Let the prompts that didn't get a result be tried again on the next round of checks.
+      const got = latest.current.results;
+      todo.forEach((x) => { if (!got[x.id]) tried.current.delete(x.id); });
     } finally {
       busyRef.current = false;
       setBusy(false);
     }
   }, []);
 
+  // Live scoring: while the round is open, send new prompts to Gemini in one batch every 10 seconds
+  // (a few calls a minute however many students there are), and once more when the round closes.
+  useEffect(() => {
+    if (!round || round.published || !aiReady(ai)) return;
+    if (!open) { run(true); return; }
+    run(true);
+    const t = setInterval(() => run(true), LIVE_EVERY_MS);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roundId, open, round?.published, ai.enabled, ai.apiKey]);
+
+  // After the round closes, late prompts (or ones that failed) are picked up as they appear.
   useEffect(() => {
     if (round && !open && !round.published && aiReady(ai)) run(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roundId, open, round?.published, subs.length, ai.enabled, ai.apiKey]);
+  }, [subs.length]);
 
   return { results, busy, error, run };
 }
@@ -436,7 +453,7 @@ function Scoring({ round, subs, refresh, open, ai, aiState, scoring }: {
   if (round.published) {
     action = { label: dirty ? 'Update published scores' : 'Scores published', onClick: publish, disabled: !dirty };
   } else if (aiOn && open) {
-    action = { label: 'End the round and score with Gemini', onClick: endRound };
+    action = { label: 'End the round now', onClick: endRound };
   } else if (aiOn && aiState.busy) {
     action = { label: `Gemini is scoring… (${pending} left)`, onClick: () => {}, disabled: true };
   } else if (aiOn && pending > 0) {
@@ -459,11 +476,11 @@ function Scoring({ round, subs, refresh, open, ai, aiState, scoring }: {
       </div>
       {aiOn && (
         <div className="row wrap">
-          <button className="btn" type="button" disabled={aiState.busy || open || pending === 0} onClick={() => aiState.run(false)}>
+          <button className="btn" type="button" disabled={aiState.busy || pending === 0} onClick={() => aiState.run(false)}>
             {aiState.busy ? 'Gemini is scoring…' : 'Score with AI'}
           </button>
           <span className="muted small">
-            {open ? 'Gemini scores when the round ends.' : `${subs.length - pending} of ${subs.length} scored by Gemini.`}
+            {`${subs.length - pending} of ${subs.length} scored by Gemini.`}{open ? ' New prompts are scored every 10 seconds.' : ''}
           </span>
         </div>
       )}

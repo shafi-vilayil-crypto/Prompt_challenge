@@ -30,7 +30,7 @@ The app ticks the parts by looking for words in English and Malayalam, so it can
 
 In **Run the game → AI scoring**, the teacher switches AI on and pastes a free Gemini API key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey), then presses **Save and test**.
 
-- When a round ends, Gemini reads every prompt. It ticks the method's parts (only those that really fit the question), suggests a 0–3 bonus, and writes a one-line comment in the prompt's own language.
+- While a round is open, Gemini scores new prompts every 10 seconds, in one batch (a few calls a minute however many students), and once more when the round closes; so scores are ready at time-up. It ticks the method's parts (only those that really fit the question), suggests a 0–3 bonus, and writes a one-line comment in the prompt's own language.
 - Until Gemini answers, or if it fails, the word check scores stay in place. The teacher can change anything before publishing; parts the teacher changed by hand are never overwritten.
 - Students see the comment with their score after publishing. This needs [`supabase/003_ai_feedback.sql`](supabase/003_ai_feedback.sql) on projects set up before this update.
 - The key is kept only in the teacher's browser, and Gemini is called from the teacher's screen only. Students' phones never contact Gemini. The free tier allows a few requests per minute; prompts are sent 15 at a time.
