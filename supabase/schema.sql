@@ -20,7 +20,8 @@ create table public.rounds (
   question text not null,
   started_at timestamptz not null default now(),
   ends_at timestamptz not null,
-  published boolean not null default false
+  published boolean not null default false,
+  method text not null default 'basic' check (method ~ '^[a-z_]{2,20}$')  -- prompting method for the round
 );
 
 create table public.submissions (
@@ -93,7 +94,7 @@ create policy submissions_teacher on public.submissions for all to authenticated
 
 -- ───────────── Teacher actions (times come from the server clock) ─────────────
 
-create or replace function public.start_round(p_question text, p_seconds int)
+create or replace function public.start_round(p_question text, p_seconds int, p_method text default 'basic')
 returns public.rounds
 language plpgsql security definer set search_path = public as $$
 declare r public.rounds;
@@ -101,9 +102,10 @@ begin
   if not public.is_teacher() then raise exception 'Only the teacher can start a round' using errcode = '42501'; end if;
   if p_seconds is null or p_seconds not between 10 and 1800 then raise exception 'Time must be 10 seconds to 30 minutes'; end if;
   if char_length(btrim(coalesce(p_question, ''))) < 3 then raise exception 'Pick a question first'; end if;
+  if coalesce(p_method, 'basic') !~ '^[a-z_]{2,20}$' then raise exception 'Unknown prompting method'; end if;
   update public.rounds set ends_at = now() where ends_at > now();   -- close any open round
-  insert into public.rounds (question, ends_at)
-    values (btrim(p_question), now() + make_interval(secs => p_seconds))
+  insert into public.rounds (question, ends_at, method)
+    values (btrim(p_question), now() + make_interval(secs => p_seconds), coalesce(p_method, 'basic'))
     returning * into r;
   return r;
 end $$;
@@ -125,7 +127,7 @@ begin
 end $$;
 
 -- p_scores: [{ "id": "<submission id>", "parts": ["role","task",...], "bonus": 0-3 }, ...]
--- The score is always worked out here: 2 points per part + bonus (max 15).
+-- The score is always worked out here: 2 points per part (at most 6 parts) + bonus (max 15).
 create or replace function public.publish_round(p_round uuid, p_scores jsonb) returns void
 language plpgsql security definer set search_path = public as $$
 begin
@@ -134,18 +136,18 @@ begin
     parts = coalesce((
       select array_agg(distinct p)
       from jsonb_array_elements_text(x.value -> 'parts') p
-      where p in ('role', 'task', 'audience', 'format', 'language', 'detail')
+      where p ~ '^[a-z_]{2,20}$'
     ), '{}'),
     bonus = least(3, greatest(0, coalesce((x.value ->> 'bonus')::int, 0)))
   from jsonb_array_elements(p_scores) x
   where s.round_id = p_round and s.id = (x.value ->> 'id')::uuid;
-  update public.submissions set score = 2 * cardinality(parts) + bonus where round_id = p_round;
+  update public.submissions set score = 2 * least(cardinality(parts), 6) + bonus where round_id = p_round;
   update public.rounds set published = true, ends_at = least(ends_at, now()) where id = p_round;
 end $$;
 
-revoke execute on function public.start_round(text, int), public.end_round(uuid),
+revoke execute on function public.start_round(text, int, text), public.end_round(uuid),
   public.add_time(uuid, int), public.publish_round(uuid, jsonb) from public, anon;
-grant execute on function public.start_round(text, int), public.end_round(uuid),
+grant execute on function public.start_round(text, int, text), public.end_round(uuid),
   public.add_time(uuid, int), public.publish_round(uuid, jsonb) to authenticated;
 grant execute on function public.server_now() to anon, authenticated;
 
@@ -171,7 +173,11 @@ insert into public.questions (text) values
   ('Ask AI to write a short poem about your school.'),
   ('Ask AI for 5 ways to save water at home.'),
   ('Ask AI to explain what AI is to your grandmother, in Malayalam.'),
-  ('Ask AI to make a 5-question quiz about plants.');
+  ('Ask AI to make a 5-question quiz about plants.'),
+  ('ജലചക്രം ഏഴാം ക്ലാസ് കുട്ടിക്ക് മനസ്സിലാകുന്ന രീതിയിൽ വിശദീകരിക്കാൻ AI-യോട് ആവശ്യപ്പെടുക.'),
+  ('ഓണത്തെക്കുറിച്ച് ഒരു ചെറിയ കവിത എഴുതാൻ AI-യോട് ആവശ്യപ്പെടുക.'),
+  ('പരീക്ഷയ്ക്ക് ഒരാഴ്ചത്തെ പഠന പ്ലാൻ ഉണ്ടാക്കാൻ AI-യോട് ആവശ്യപ്പെടുക.'),
+  ('വീട്ടിൽ വെള്ളം ലാഭിക്കാനുള്ള 5 വഴികൾ AI-യോട് ചോദിക്കുക.');
 
 -- CHANGE ME: the email you will log in with as the teacher.
 insert into public.teachers (email) values ('your-email@example.com');

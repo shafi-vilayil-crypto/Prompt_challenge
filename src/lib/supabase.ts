@@ -15,6 +15,7 @@ export type Round = {
   started_at: string;
   ends_at: string;
   published: boolean;
+  method?: string; // missing until supabase/002_methods.sql has run
 };
 
 export type Submission = {

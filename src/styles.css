@@ -153,3 +153,28 @@ button.chip { cursor: pointer; }
   .pulse { animation: none; opacity: 1; }
   .bar > span { transition: none; }
 }
+
+/* Language switch */
+.lang-toggle { display: inline-flex; border: 1.5px solid var(--line); border-radius: 999px; overflow: hidden; }
+.lang-toggle button { background: transparent; color: var(--chalk); border: 0; padding: 6px 12px; font: inherit; font-size: 0.88rem; font-weight: 700; cursor: pointer; }
+.lang-toggle button.on { background: var(--chalk); color: var(--board); }
+.row.center { justify-content: center; }
+
+/* Prompting methods */
+.method-picks { display: flex; flex-wrap: wrap; gap: 8px; }
+.method-card { background: var(--board-2); border: 2px dashed var(--line); border-radius: var(--r); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.panel .method-card, .card .method-card { background: var(--board); }
+.method-head { display: flex; flex-direction: column; gap: 2px; }
+.method-name { font-family: var(--font-display); font-weight: 800; font-size: 1.4rem; line-height: 1.15; }
+.method-short { color: var(--chalk); }
+.method-parts { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.method-parts li { background: var(--chalk); color: var(--board); border-radius: 8px; padding: 3px 10px; font-weight: 700; font-size: 0.88rem; }
+.method-box { background: var(--board-3); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; overflow-wrap: anywhere; }
+.method-box.example { border-left: 3px solid var(--yellow); }
+.method-card .link { align-self: flex-start; }
+.method-card.big .method-name { font-size: clamp(1.6rem, 3vw, 2.4rem); }
+.method-card.big .method-short, .method-card.big .method-box p { font-size: 1.25rem; }
+.method-card.big .method-parts li { font-size: 1.1rem; padding: 5px 12px; }
+
+/* Token count */
+.token-count { font-weight: 700; color: var(--sky); font-size: 0.92rem; cursor: help; }

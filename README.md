@@ -1,29 +1,42 @@
 # Prompt Challenge
 
-A live classroom game for learning to write good AI prompts. Students scan a QR code, type their name, and answer the teacher's challenge on their phones before the timer runs out. Each prompt is auto-scored on six parts, the teacher adjusts and publishes, and the leaderboard updates on every screen.
+A live classroom game for learning to write good AI prompts. Students scan a QR code, type their name, and answer the teacher's challenge on their phones before the timer runs out. Each round uses a prompting method the teacher picks (ROSES, CO-STAR, few-shot and more). Prompts are auto-scored on that method's parts, the teacher adjusts and publishes, and the leaderboard updates on every screen. Works in English and Malayalam.
 
 - **Students:** `https://<your-app>.vercel.app/` (no login)
 - **Teacher:** `https://<your-app>.vercel.app/teacher` (email and password)
 
-## Scoring (15 points)
+## Prompting methods
 
-| Part | Points | Example |
-|---|---|---|
-| Role | 2 | "You are a science teacher." |
-| Clear task | 2 | "Explain…", "Write…", "List…" |
-| Audience | 2 | "…for a 7th class student" |
-| Format | 2 | "…in 5 points", "as a poem", "in a table" |
-| Language & tone | 2 | "…in simple Malayalam", "funny" |
-| Details | 2 | an example, a reason, or a longer prompt |
-| Creativity bonus | 0–3 | given by the teacher |
+For each round the teacher picks one of 10 methods. Students see a card under the question with the method, its parts, a template and an example. The projector shows it too.
 
-The app ticks the parts by looking for words, so it can be wrong. The teacher taps a part to change it. The database works out the final score from the parts the teacher accepted.
+| Method | Parts that score (2 points each) |
+|---|---|
+| Basic recipe | Role, Clear task, Audience, Format, Language & tone, Details |
+| Zero-shot | Clear task, Topic details, Format, Limits, Language & tone |
+| Few-shot | Clear task, An example, 2+ examples, Same pattern, New item |
+| Role prompting | Role, Clear task, Audience, Tone, Details |
+| Chain of thought | Clear task, All the facts, Step by step, Check answer, Format |
+| RTF | Role, Task, Format |
+| RACE | Role, Action, Context, Expectation |
+| ROSES | Role, Objective, Scenario, Expected solution, Steps |
+| CO-STAR | Context, Objective, Style, Tone, Audience, Response format |
+| Flipped interaction | Goal, AI asks you, How many, Then what, Format |
+
+The teacher adds a 0–3 creativity bonus. The most a prompt can score is (parts × 2) + 3, so 15 at most.
+
+The app ticks the parts by looking for words in English and Malayalam, so it can be wrong. The teacher taps a part to change it. The database works out the final score from the parts the teacher accepted.
+
+## Malayalam and tokens
+
+- The student page and the projector have an **English / മലയാളം** switch. Methods, templates and examples are written in both languages.
+- Students see an estimated token count while they type ("≈ 37 tokens"). AI reads text in pieces called tokens, and Malayalam needs about twice as many as English. The estimate is roughly 4 English characters, or 2 Malayalam characters, per token.
 
 ## Setup (about 15 minutes)
 
 ### 1. Supabase (free)
 1. Create a project at [supabase.com](https://supabase.com). Pick the Mumbai or Singapore region.
 2. Open **SQL Editor → New query**. Paste all of [`supabase/schema.sql`](supabase/schema.sql). Change `your-email@example.com` on the last line to your email, then **Run**.
+   Already set up before the methods update? Run [`supabase/002_methods.sql`](supabase/002_methods.sql) once instead.
 3. Open **Authentication → Users → Add user → Create new user**. Enter the same email and a password, and tick **Auto Confirm User**.
 4. Optional: in **Authentication → Sign In / Providers**, turn off **Allow new users to sign up**. Only emails in the `teachers` table can run the game anyway.
 5. Open **Project Settings → API** (or **Data API**). Copy the **Project URL** and the **anon public** key.
@@ -41,7 +54,7 @@ Open `/teacher` on your laptop and the student link on two phones. Start a 1-min
 ## Running the class
 
 1. On the laptop, open `/teacher` → **Projector** → **Full screen**. Students scan the QR code and type their names.
-2. In **Run the game**, pick a question (or type one), choose the time, and press **Start round**.
+2. In **Run the game**, pick a question (or type one), a prompting method and the time, then press **Start round**.
 3. Prompts arrive as they're sent. Use **+30 seconds** or **End now** if needed.
 4. When time's up, check the auto-ticked parts, add bonuses, and press **Publish scores to everyone**.
 5. The projector shows the three best prompts. Read them aloud: that's the lesson.

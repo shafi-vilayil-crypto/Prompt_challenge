@@ -7,7 +7,11 @@ import {
 } from '../lib/supabase';
 import { syncClock, useSecondsLeft } from '../lib/clock';
 import { usePoll } from '../lib/usePoll';
-import { MAX_BONUS, MAX_SCORE, autoParts, scoreOf } from '../lib/rubric';
+import { DEFAULT_METHOD, MAX_BONUS, METHODS, autoParts, getMethod, maxScore, scoreOf, type Lang, type Method } from '../lib/methods';
+import { STRINGS, useLang } from '../lib/i18n';
+import { estimateTokens } from '../lib/tokens';
+import { MethodCard } from '../components/MethodCard';
+import { LangToggle } from '../components/LangToggle';
 import { Timer } from '../components/Timer';
 import { Leaderboard } from '../components/Leaderboard';
 import { PartChips } from '../components/PartChips';
@@ -151,7 +155,7 @@ function Run({ round, subs, board, refresh }: { round: Round | null; subs: Submi
               {!round.published && <Timer endsAt={round.ends_at} />}
             </div>
             <h2 className="question">{round.question}</h2>
-            <p className="muted">{subs.length} {subs.length === 1 ? 'prompt' : 'prompts'} received</p>
+            <p className="muted">Method: <strong>{getMethod(round.method).name.en}</strong> · {subs.length} {subs.length === 1 ? 'prompt' : 'prompts'} received</p>
             {open && <RoundButtons round={round} refresh={refresh} />}
           </section>
         )}
@@ -194,6 +198,8 @@ function StartRound({ open, refresh }: { open: boolean; refresh: () => Promise<v
   const [questions, setQuestions] = useState<Question[]>([]);
   const [picked, setPicked] = useState('');
   const [seconds, setSeconds] = useState(120);
+  const [methodId, setMethodId] = useState(DEFAULT_METHOD);
+  const [preview, setPreview] = useState<Lang>('en');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [confirming, setConfirming] = useState(false);
@@ -210,9 +216,11 @@ function StartRound({ open, refresh }: { open: boolean; refresh: () => Promise<v
     setConfirming(false);
     setBusy(true);
     setError('');
-    const { error } = await supabase.rpc('start_round', { p_question: picked, p_seconds: seconds });
+    const { error } = await supabase.rpc('start_round', { p_question: picked, p_seconds: seconds, p_method: methodId });
     setBusy(false);
-    if (error) setError(friendly(error));
+    if (error && (error.code === 'PGRST202' || /p_method/.test(error.message))) {
+      setError('The database needs the methods update. In Supabase SQL Editor, run supabase/002_methods.sql, then try again.');
+    } else if (error) setError(friendly(error));
     else setPicked('');
     await refresh();
   }
@@ -237,6 +245,19 @@ function StartRound({ open, refresh }: { open: boolean; refresh: () => Promise<v
       </div>
       <label className="label" htmlFor="custom-q">Or type a question</label>
       <input id="custom-q" className="input" value={picked} maxLength={300} onChange={(e) => setPicked(e.target.value)} placeholder="Ask AI to…" />
+      <span className="label">Prompting method</span>
+      <div className="method-picks" role="radiogroup" aria-label="Prompting method">
+        {METHODS.map((m) => (
+          <button key={m.id} type="button" role="radio" aria-checked={methodId === m.id} className={`pill${methodId === m.id ? ' on' : ''}`} onClick={() => setMethodId(m.id)}>
+            {m.name.en}
+          </button>
+        ))}
+      </div>
+      <div className="row between wrap">
+        <span className="muted small">Students see this card under the question.</span>
+        <LangToggle lang={preview} onChange={setPreview} />
+      </div>
+      <MethodCard method={getMethod(methodId)} lang={preview} heading="Method" showExample />
       <span className="label">Time</span>
       <div className="row wrap">
         {DURATIONS.map((s) => (
@@ -254,6 +275,9 @@ function StartRound({ open, refresh }: { open: boolean; refresh: () => Promise<v
 }
 
 function Scoring({ round, subs, refresh }: { round: Round; subs: Submission[]; refresh: () => Promise<void> }) {
+  const method = getMethod(round.method);
+  const max = maxScore(method);
+  const firstScore = (s: Submission) => s.score ?? scoreOf(method, autoParts(method, s.prompt), 0);
   const [marks, setMarks] = useState<Marks>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -267,12 +291,13 @@ function Scoring({ round, subs, refresh }: { round: Round; subs: Submission[]; r
       const next = { ...m };
       for (const s of subs) {
         if (!next[s.id]) {
-          next[s.id] = s.score !== null ? { parts: s.parts, bonus: s.bonus } : { parts: autoParts(s.prompt), bonus: 0 };
+          next[s.id] = s.score !== null ? { parts: s.parts, bonus: s.bonus } : { parts: autoParts(method, s.prompt), bonus: 0 };
           changed = true;
         }
       }
       return changed ? next : m;
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subs]);
 
   // Best first, by the saved or auto score. Re-sorted only when prompts arrive, so cards don't jump while the teacher taps.
@@ -306,7 +331,7 @@ function Scoring({ round, subs, refresh }: { round: Round; subs: Submission[]; r
     <section className="card stack">
       <div className="row between wrap">
         <h2>Score the prompts</h2>
-        <span className="muted small">Auto-scored. Tap a part to change it.</span>
+        <span className="muted small">{method.name.en} · auto-scored. Tap a part to change it.</span>
       </div>
       <ul className="sub-list">
         {ordered.map((s) => {
@@ -315,10 +340,12 @@ function Scoring({ round, subs, refresh }: { round: Round; subs: Submission[]; r
             <li key={s.id} className="sub">
               <div className="row between">
                 <strong className="sub-name">{s.name}</strong>
-                <span className="sub-score">{scoreOf(m.parts, m.bonus)}<span className="muted small"> / {MAX_SCORE}</span></span>
+                <span className="sub-score">{scoreOf(method, m.parts, m.bonus)}<span className="muted small"> / {max}</span></span>
               </div>
               <blockquote className="quote">{s.prompt}</blockquote>
+              <span className="muted small">≈ {estimateTokens(s.prompt)} tokens</span>
               <PartChips
+                method={method}
                 on={m.parts}
                 compact
                 onToggle={(id) => update(s.id, (x) => ({ ...x, parts: x.parts.includes(id) ? x.parts.filter((p) => p !== id) : [...x.parts, id] }))}
@@ -344,8 +371,6 @@ function Scoring({ round, subs, refresh }: { round: Round; subs: Submission[]; r
     </section>
   );
 }
-
-const firstScore = (s: Submission) => s.score ?? scoreOf(autoParts(s.prompt), 0);
 
 function ClearAll({ refresh }: { refresh: () => Promise<void> }) {
   const [armed, setArmed] = useState(false);
@@ -377,6 +402,9 @@ function ClearAll({ refresh }: { refresh: () => Promise<void> }) {
 // ───────────── Projector ─────────────
 
 function Projector({ round, subs, board }: { round: Round | null; subs: Submission[]; board: LeaderRow[] }) {
+  const [lang, setLang] = useLang();
+  const t = STRINGS[lang];
+  const method: Method | null = round ? getMethod(round.method) : null;
   const url = window.location.origin + '/';
   const [qr, setQr] = useState('');
   useEffect(() => {
@@ -392,31 +420,36 @@ function Projector({ round, subs, board }: { round: Round | null; subs: Submissi
       <section className="proj-join">
         {qr && <img className="qr" src={qr} alt={`QR code for ${url}`} />}
         <p className="proj-url">{url.replace(/^https?:\/\//, '').replace(/\/$/, '')}</p>
-        <p className="muted">Scan, type your name, and wait for the question.</p>
-        <button className="btn" type="button" onClick={() => document.documentElement.requestFullscreen?.().catch(() => {})}>Full screen</button>
+        <p className="muted">{t.scanJoin}</p>
+        <div className="row wrap center">
+          <LangToggle lang={lang} onChange={setLang} />
+          <button className="btn" type="button" onClick={() => document.documentElement.requestFullscreen?.().catch(() => {})}>Full screen</button>
+        </div>
       </section>
 
       <section className="proj-main">
         {!round ? (
-          <h1 className="proj-q">Get ready! The first challenge starts soon.</h1>
+          <h1 className="proj-q">{t.getReady}</h1>
         ) : (
           <>
-            <span className="eyebrow">{round.published ? 'Results' : 'Challenge'}</span>
+            <span className="eyebrow">{round.published ? t.results : t.challenge}</span>
             <h1 className="proj-q">{round.question}</h1>
             {!round.published && (
               <div className="row wrap proj-status">
-                <Timer endsAt={round.ends_at} big />
-                <span className="proj-count">{subs.length} {subs.length === 1 ? 'prompt' : 'prompts'} sent</span>
+                <Timer endsAt={round.ends_at} big doneLabel={t.timesUp} />
+                <span className="proj-count">{t.promptsSent(subs.length)}</span>
               </div>
             )}
+            {!round.published && method && <MethodCard method={method} lang={lang} big />}
             {top3.length > 0 && (
               <div className="stack">
-                <span className="eyebrow">Best prompts this round</span>
+                <span className="eyebrow">{t.bestPrompts}</span>
                 <ol className="top-prompts">
                   {top3.map((s) => (
                     <li key={s.id}>
                       <div className="row between"><strong>{s.name}</strong><span className="sub-score">{s.score}</span></div>
                       <blockquote className="quote">{s.prompt}</blockquote>
+                      <span className="muted small">{t.tokens(estimateTokens(s.prompt))}</span>
                     </li>
                   ))}
                 </ol>
@@ -425,8 +458,8 @@ function Projector({ round, subs, board }: { round: Round | null; subs: Submissi
           </>
         )}
         <div className="stack">
-          <span className="eyebrow">Leaderboard</span>
-          <Leaderboard rows={board} limit={8} big />
+          <span className="eyebrow">{t.leaderboard}</span>
+          <Leaderboard rows={board} limit={8} big emptyText={t.boardEmpty} youLabel={t.you} />
         </div>
       </section>
     </div>

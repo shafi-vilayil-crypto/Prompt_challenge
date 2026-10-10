@@ -1,1 +1,0 @@
-{"root":["./src/App.tsx","./src/main.tsx","./src/components/Leaderboard.tsx","./src/components/PartChips.tsx","./src/components/Timer.tsx","./src/lib/clock.ts","./src/lib/player.ts","./src/lib/rubric.ts","./src/lib/supabase.ts","./src/lib/usePoll.ts","./src/pages/Student.tsx","./src/pages/Teacher.tsx"],"version":"5.9.3"}
