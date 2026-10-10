@@ -20,7 +20,7 @@ type Strings = {
   seeExample: string; hideExample: string; template: string; example: string;
   sent: string; timeUpWait: string; writePrompt: string; placeholder: string; onceOnly: string;
   send: string; sending: string; alreadySent: string; closed: string; results: string;
-  bonusTotal: (bonus: number, total: number) => string; missed: string; leaderboard: string; waitNext: string;
+  bonusTotal: (bonus: number, total: number) => string; feedback: string; missed: string; leaderboard: string; waitNext: string;
   boardEmpty: string; you: string; timesUp: string; partsLabel: string;
   verdict: (score: number, max: number) => string; tokens: (n: number) => string; tokensHelp: string;
   promptsSent: (n: number) => string; scanJoin: string; getReady: string; bestPrompts: string; method: string;
@@ -53,6 +53,7 @@ export const STRINGS: Record<Lang, Strings> = {
     closed: "Time's up. This round is closed.",
     results: 'Results',
     bonusTotal: (b, t) => `+${b} creativity bonus from your teacher = ${t} points`,
+    feedback: 'Feedback',
     missed: "You didn't send a prompt this round. Join the next one!",
     leaderboard: 'Leaderboard',
     waitNext: 'Wait for the next round. This page updates by itself.',
@@ -95,6 +96,7 @@ export const STRINGS: Record<Lang, Strings> = {
     closed: 'സമയം കഴിഞ്ഞു. ഈ റൗണ്ട് അവസാനിച്ചു.',
     results: 'ഫലം',
     bonusTotal: (b, t) => `ടീച്ചറിൽ നിന്ന് +${b} ക്രിയേറ്റിവിറ്റി ബോണസ് = ${t} പോയിന്റ്`,
+    feedback: 'അഭിപ്രായം',
     missed: 'ഈ റൗണ്ടിൽ നിങ്ങൾ പ്രോംപ്റ്റ് അയച്ചില്ല. അടുത്ത റൗണ്ടിൽ പങ്കെടുക്കൂ!',
     leaderboard: 'സ്കോർ പട്ടിക',
     waitNext: 'അടുത്ത റൗണ്ടിനായി കാത്തിരിക്കുക. ഈ പേജ് തനിയെ പുതുക്കും.',

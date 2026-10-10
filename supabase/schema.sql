@@ -33,6 +33,7 @@ create table public.submissions (
   parts text[] not null default '{}', -- rubric parts the teacher accepted
   bonus int not null default 0 check (bonus between 0 and 3),
   score int check (score between 0 and 15),
+  feedback text check (char_length(feedback) <= 300), -- AI comment, saved when the teacher publishes
   created_at timestamptz not null default now(),
   unique (round_id, player_id)        -- one answer per phone per round
 );
@@ -126,7 +127,7 @@ begin
     where id = p_round and not published;
 end $$;
 
--- p_scores: [{ "id": "<submission id>", "parts": ["role","task",...], "bonus": 0-3 }, ...]
+-- p_scores: [{ "id": "<submission id>", "parts": ["role","task",...], "bonus": 0-3, "comment": "AI feedback" }, ...]
 -- The score is always worked out here: 2 points per part (at most 6 parts) + bonus (max 15).
 create or replace function public.publish_round(p_round uuid, p_scores jsonb) returns void
 language plpgsql security definer set search_path = public as $$
@@ -138,7 +139,8 @@ begin
       from jsonb_array_elements_text(x.value -> 'parts') p
       where p ~ '^[a-z_]{2,20}$'
     ), '{}'),
-    bonus = least(3, greatest(0, coalesce((x.value ->> 'bonus')::int, 0)))
+    bonus = least(3, greatest(0, coalesce((x.value ->> 'bonus')::int, 0))),
+    feedback = nullif(left(btrim(coalesce(x.value ->> 'comment', '')), 300), '')
   from jsonb_array_elements(p_scores) x
   where s.round_id = p_round and s.id = (x.value ->> 'id')::uuid;
   update public.submissions set score = 2 * least(cardinality(parts), 6) + bonus where round_id = p_round;

@@ -210,6 +210,12 @@ function Results({ lang, round, mine, board, player }: { lang: Lang; round: Roun
             {mine.bonus > 0 && <p className="bonus-line">{s.bonusTotal(mine.bonus, mine.score)}</p>}
             <span className="label">{s.partsLabel}</span>
             <PartChips method={method} on={mine.parts} lang={lang} compact />
+            {mine.feedback && (
+              <div className="feedback-box">
+                <span className="label">{s.feedback}</span>
+                <p>{mine.feedback}</p>
+              </div>
+            )}
             <blockquote className="quote">{mine.prompt}</blockquote>
             <span className="muted small">{s.tokens(estimateTokens(mine.prompt))}</span>
           </div>

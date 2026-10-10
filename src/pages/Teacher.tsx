@@ -15,6 +15,7 @@ import { LangToggle } from '../components/LangToggle';
 import { Timer } from '../components/Timer';
 import { Leaderboard } from '../components/Leaderboard';
 import { PartChips } from '../components/PartChips';
+import { DEFAULT_MODEL, aiReady, aiScore, aiTest, loadAi, saveAi, type AiResult, type AiSettings } from '../lib/ai';
 import { Brand } from './Student';
 
 type Tab = 'run' | 'screen' | 'questions';
@@ -144,6 +145,8 @@ function Console() {
 function Run({ round, subs, board, refresh }: { round: Round | null; subs: Submission[]; board: LeaderRow[]; refresh: () => Promise<void> }) {
   const left = useSecondsLeft(round?.ends_at);
   const open = Boolean(round && !round.published && left > 0);
+  const [ai, setAiState] = useState<AiSettings>(loadAi);
+  const setAi = (next: AiSettings) => { saveAi(next); setAiState(next); };
 
   return (
     <div className="grid-2">
@@ -160,11 +163,12 @@ function Run({ round, subs, board, refresh }: { round: Round | null; subs: Submi
           </section>
         )}
         {round && (round.published || !open || subs.length > 0) && (
-          <Scoring key={round.id} round={round} subs={subs} refresh={refresh} />
+          <Scoring key={round.id} round={round} subs={subs} refresh={refresh} open={open} ai={ai} />
         )}
         <StartRound open={open} refresh={refresh} />
       </div>
       <div className="stack">
+        <AiSettingsCard ai={ai} setAi={setAi} />
         <section className="card stack">
           <h2>Leaderboard</h2>
           <Leaderboard rows={board} limit={50} />
@@ -274,7 +278,7 @@ function StartRound({ open, refresh }: { open: boolean; refresh: () => Promise<v
   );
 }
 
-function Scoring({ round, subs, refresh }: { round: Round; subs: Submission[]; refresh: () => Promise<void> }) {
+function Scoring({ round, subs, refresh, open, ai }: { round: Round; subs: Submission[]; refresh: () => Promise<void>; open: boolean; ai: AiSettings }) {
   const method = getMethod(round.method);
   const max = method.parts.length * 2;
   const firstScore = (s: Submission) => s.score ?? scoreOf(method, autoParts(method, s.prompt), 0);
@@ -283,6 +287,44 @@ function Scoring({ round, subs, refresh }: { round: Round; subs: Submission[]; r
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [aiRes, setAiRes] = useState<Record<string, AiResult>>({});
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState('');
+  const touched = useRef(new Set<string>()); // prompts the teacher changed by hand: AI never overwrites them
+  const tried = useRef(new Set<string>());   // prompts already sent to Gemini automatically
+  const aiBusyRef = useRef(false);
+
+  async function runAi(onlyUntried: boolean) {
+    if (!aiReady(ai) || aiBusyRef.current) return;
+    const todo = subs.filter((x) => !aiRes[x.id] && (!onlyUntried || !tried.current.has(x.id)));
+    if (!todo.length) return;
+    todo.forEach((x) => tried.current.add(x.id));
+    aiBusyRef.current = true;
+    setAiBusy(true);
+    setAiError('');
+    try {
+      await aiScore(ai, method, round.question, todo.map((x) => ({ id: x.id, prompt: x.prompt })), (res) => {
+        setAiRes((r) => ({ ...r, ...res }));
+        setMarks((m) => {
+          const next = { ...m };
+          for (const [id, r] of Object.entries(res)) if (!touched.current.has(id)) next[id] = { parts: r.parts, bonus: r.bonus };
+          return next;
+        });
+        setDirty(true);
+      });
+    } catch (e) {
+      setAiError((e as Error).message);
+    } finally {
+      aiBusyRef.current = false;
+      setAiBusy(false);
+    }
+  }
+
+  // With AI on, score automatically once the round closes (and again if late prompts appear before publishing).
+  useEffect(() => {
+    if (!open && !round.published && aiReady(ai)) runAi(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, round.published, subs.length, ai.enabled, ai.apiKey]);
 
   // First time a prompt is seen: published rounds keep their saved marks, new ones get the auto-score.
   useEffect(() => {
@@ -308,6 +350,7 @@ function Scoring({ round, subs, refresh }: { round: Round; subs: Submission[]; r
   );
 
   const update = (id: string, fn: (m: { parts: string[]; bonus: number }) => { parts: string[]; bonus: number }) => {
+    touched.current.add(id);
     setMarks((m) => ({ ...m, [id]: fn(m[id] ?? { parts: [], bonus: 0 }) }));
     setDirty(true);
     setSaved(false);
@@ -316,7 +359,12 @@ function Scoring({ round, subs, refresh }: { round: Round; subs: Submission[]; r
   async function publish() {
     setBusy(true);
     setError('');
-    const payload = subs.map((s) => ({ id: s.id, parts: marks[s.id]?.parts ?? [], bonus: marks[s.id]?.bonus ?? 0 }));
+    const payload = subs.map((s) => ({
+      id: s.id,
+      parts: marks[s.id]?.parts ?? [],
+      bonus: marks[s.id]?.bonus ?? 0,
+      comment: aiRes[s.id]?.comment ?? s.feedback ?? '',
+    }));
     const { error } = await supabase.rpc('publish_round', { p_round: round.id, p_scores: payload });
     setBusy(false);
     if (error) { setError(friendly(error)); return; }
@@ -331,8 +379,21 @@ function Scoring({ round, subs, refresh }: { round: Round; subs: Submission[]; r
     <section className="card stack">
       <div className="row between wrap">
         <h2>Score the prompts</h2>
-        <span className="muted small">{method.name.en} · auto-scored. Tap a part to change it.</span>
+        <span className="muted small">
+          {method.name.en} · {aiReady(ai) ? 'scored by Gemini (word check until it answers)' : 'word check'}. Tap a part to change it.
+        </span>
       </div>
+      {aiReady(ai) && !round.published && (
+        <div className="row wrap">
+          <button className="btn" type="button" disabled={aiBusy || open || subs.every((x) => aiRes[x.id])} onClick={() => runAi(false)}>
+            {aiBusy ? 'Gemini is scoring…' : 'Score with AI'}
+          </button>
+          <span className="muted small">
+            {open ? 'Gemini scores when the round ends.' : `${Object.keys(aiRes).length} of ${subs.length} scored by Gemini.`}
+          </span>
+        </div>
+      )}
+      {aiError && <p className="error" role="alert">{aiError} The word check scores are kept.</p>}
       <ul className="sub-list">
         {ordered.map((s) => {
           const m = marks[s.id] ?? { parts: [], bonus: 0 };
@@ -344,6 +405,9 @@ function Scoring({ round, subs, refresh }: { round: Round; subs: Submission[]; r
               </div>
               <blockquote className="quote">{s.prompt}</blockquote>
               <span className="muted small">≈ {estimateTokens(s.prompt)} tokens</span>
+              {(aiRes[s.id]?.comment || s.feedback) && (
+                <p className="ai-comment"><span className="ai-tag">Gemini</span>{aiRes[s.id]?.comment || s.feedback}</p>
+              )}
               <PartChips
                 method={method}
                 on={m.parts}
@@ -368,6 +432,72 @@ function Scoring({ round, subs, refresh }: { round: Round; subs: Submission[]; r
       {!round.published && <p className="muted small">Publishing also closes the round, so late prompts can't come in.</p>}
       {saved && <p className="success">Scores published. Students see them now.</p>}
       {error && <p className="error" role="alert">{error}</p>}
+    </section>
+  );
+}
+
+function AiSettingsCard({ ai, setAi }: { ai: AiSettings; setAi: (s: AiSettings) => void }) {
+  const [key, setKey] = useState(ai.apiKey);
+  const [model, setModel] = useState(ai.model);
+  const [show, setShow] = useState(false);
+  const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testing, setTesting] = useState(false);
+
+  async function saveAndTest() {
+    const next = { ...ai, apiKey: key.trim(), model: model.trim() || DEFAULT_MODEL };
+    setAi(next);
+    setTesting(true);
+    setStatus(null);
+    try {
+      await aiTest(next);
+      setStatus({ ok: true, text: 'Saved. Gemini is working.' });
+    } catch (e) {
+      setStatus({ ok: false, text: (e as Error).message });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  return (
+    <section className="card stack">
+      <div className="row between">
+        <h2>AI scoring</h2>
+        <button
+          type="button"
+          className={`switch${ai.enabled ? ' on' : ''}`}
+          role="switch"
+          aria-checked={ai.enabled}
+          aria-label="AI scoring"
+          onClick={() => setAi({ ...ai, enabled: !ai.enabled })}
+        >
+          <span className="switch-knob" />
+          <span className="switch-text">{ai.enabled ? 'On' : 'Off'}</span>
+        </button>
+      </div>
+      <p className="muted small">
+        {ai.enabled
+          ? 'Gemini reads each prompt when the round ends, ticks the parts, suggests a bonus and writes a short comment. You can still change everything before publishing.'
+          : 'Off: prompts are scored by the word check only.'}
+      </p>
+      {ai.enabled && (
+        <>
+          <label className="label" htmlFor="ai-key">Gemini API key</label>
+          <div className="row">
+            <input id="ai-key" className="input" type={show ? 'text' : 'password'} autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste your key" />
+            <button className="btn small" type="button" onClick={() => setShow((v) => !v)}>{show ? 'Hide' : 'Show'}</button>
+          </div>
+          <label className="label" htmlFor="ai-model">Model</label>
+          <input id="ai-model" className="input" value={model} onChange={(e) => setModel(e.target.value)} placeholder={DEFAULT_MODEL} />
+          <button className="btn primary" type="button" disabled={testing || key.trim().length < 10} onClick={saveAndTest}>
+            {testing ? 'Testing…' : 'Save and test'}
+          </button>
+          {status && <p className={status.ok ? 'success' : 'error'} role="status">{status.text}</p>}
+          <p className="muted small">
+            Get a free key at <a className="link-inline" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.
+            The key stays in this browser only. Students never see it.
+          </p>
+        </>
+      )}
     </section>
   );
 }
@@ -450,6 +580,7 @@ function Projector({ round, subs, board }: { round: Round | null; subs: Submissi
                       <div className="row between"><strong>{s.name}</strong><span className="sub-score">{s.score}</span></div>
                       <blockquote className="quote">{s.prompt}</blockquote>
                       <span className="muted small">{t.tokens(estimateTokens(s.prompt))}</span>
+                      {s.feedback && <p className="ai-comment"><span className="ai-tag">Gemini</span>{s.feedback}</p>}
                     </li>
                   ))}
                 </ol>

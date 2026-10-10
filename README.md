@@ -26,6 +26,15 @@ The teacher adds a 0–3 creativity bonus. The most a prompt can score is (parts
 
 The app ticks the parts by looking for words in English and Malayalam, so it can be wrong. The teacher taps a part to change it. The database works out the final score from the parts the teacher accepted.
 
+## AI scoring with Gemini (optional)
+
+In **Run the game → AI scoring**, the teacher switches AI on and pastes a free Gemini API key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey), then presses **Save and test**.
+
+- When a round ends, Gemini reads every prompt. It ticks the method's parts (only those that really fit the question), suggests a 0–3 bonus, and writes a one-line comment in the prompt's own language.
+- Until Gemini answers, or if it fails, the word check scores stay in place. The teacher can change anything before publishing; parts the teacher changed by hand are never overwritten.
+- Students see the comment with their score after publishing. This needs [`supabase/003_ai_feedback.sql`](supabase/003_ai_feedback.sql) on projects set up before this update.
+- The key is kept only in the teacher's browser, and Gemini is called from the teacher's screen only. Students' phones never contact Gemini. The free tier allows a few requests per minute; prompts are sent 15 at a time.
+
 ## Malayalam and tokens
 
 - The student page and the projector have an **English / മലയാളം** switch. Methods, templates and examples are written in both languages.
@@ -36,7 +45,7 @@ The app ticks the parts by looking for words in English and Malayalam, so it can
 ### 1. Supabase (free)
 1. Create a project at [supabase.com](https://supabase.com). Pick the Mumbai or Singapore region.
 2. Open **SQL Editor → New query**. Paste all of [`supabase/schema.sql`](supabase/schema.sql). Change `your-email@example.com` on the last line to your email, then **Run**.
-   Already set up before the methods update? Run [`supabase/002_methods.sql`](supabase/002_methods.sql) once instead.
+   Set up before the updates? Run [`supabase/002_methods.sql`](supabase/002_methods.sql), then [`supabase/003_ai_feedback.sql`](supabase/003_ai_feedback.sql), once each, instead.
 3. Open **Authentication → Users → Add user → Create new user**. Enter the same email and a password, and tick **Auto Confirm User**.
 4. Optional: in **Authentication → Sign In / Providers**, turn off **Allow new users to sign up**. Only emails in the `teachers` table can run the game anyway.
 5. Open **Project Settings → API** (or **Data API**). Copy the **Project URL** and the **anon public** key.

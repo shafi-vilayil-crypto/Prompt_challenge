@@ -27,6 +27,7 @@ export type Submission = {
   parts: string[];
   bonus: number;
   score: number | null;
+  feedback?: string | null; // AI comment, saved on publish (supabase/003_ai_feedback.sql)
   created_at: string;
 };
 
