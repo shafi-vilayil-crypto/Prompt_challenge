@@ -12,11 +12,11 @@ export const PARTS: Part[] = [
   },
   {
     id: 'task', label: 'Clear task', hint: 'Says exactly what to do (explain, write, list)',
-    test: (t) => /\b(explain|write|list|make|create|give|tell|describe|summari[sz]e|translate|compare|draw|plan|suggest|teach|prepare|design|help me|find)\b/i.test(t),
+    test: (t) => /\b(explain|explanation|write|list|make|create|give|tell|describe|summari[sz]e|summary|translate|compare|draw|plan|suggest|teach|prepare|design|help|find|show|generate|what|how|why|who|when|where|which|can you|could you|please)\b/i.test(t),
   },
   {
     id: 'audience', label: 'Audience', hint: 'Who is it for ("for a 7th class student")',
-    test: (t) => /\b(for (a|an|my|me|kids|children|students|class|beginners|parents|grandma|grandmother)|students?|class \d+|\d+(st|nd|rd|th) (class|std|standard|grade)|grade|std|year[- ]old|beginners?|child|kids)\b/i.test(t),
+    test: (t) => /\b((for|to) (a|an|my|me|kids|children|students|class|beginners|parents|grandma|grandmother|friends?)|students?|class \d+|\d+(st|nd|rd|th) (class|std|standard|grade)|grade|std|year[- ]old|beginners?|child(ren)?|kids|grand(ma|mother|pa|father)|parents|teachers?|friends?|villagers|farmers)\b/i.test(t),
   },
   {
     id: 'format', label: 'Format', hint: 'Shape of the answer (5 points, table, poem)',
