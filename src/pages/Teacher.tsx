@@ -23,6 +23,8 @@ import {
   loadSavedResults, loadUsage, releaseAiLock, saveResults, takeAiLock, type ClaudeUsage,
 } from '../lib/budget';
 import { Brand } from './Student';
+import { Pager, paginate } from '../components/Pager';
+import { SAMPLE_QUESTIONS } from '../lib/sampleQuestions';
 import { RainBackground } from '../components/RainBackground';
 import { Confetti } from '../components/Confetti';
 import { Podium } from '../components/Podium';
@@ -386,6 +388,10 @@ function StartRound({ open, refresh }: { open: boolean; refresh: () => Promise<v
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [confirming, setConfirming] = useState(false);
+  const [search, setSearch] = useState('');
+  const [qPage, setQPage] = useState(0);
+  const filtered = questions.filter((q) => q.text.toLowerCase().includes(search.trim().toLowerCase()));
+  const { pageItems, pages, page } = paginate(filtered, qPage, 6);
 
   useEffect(() => {
     supabase.from('questions').select('*').order('created_at').then(({ data, error }) => {
@@ -412,8 +418,15 @@ function StartRound({ open, refresh }: { open: boolean; refresh: () => Promise<v
     <section className="card stack">
       <h2>Start a new round</h2>
       {questions.length === 0 && <p className="muted">No questions yet. Add some in the Questions tab, or type one below.</p>}
+      {questions.length > 6 && (
+        <input
+          id="q-search" className="input" type="search" value={search} placeholder={`Search ${questions.length} questions`}
+          onChange={(e) => { setSearch(e.target.value); setQPage(0); }}
+        />
+      )}
+      {search && filtered.length === 0 && <p className="muted small">No question matches "{search}".</p>}
       <div className="question-picks" role="radiogroup" aria-label="Question">
-        {questions.map((q) => (
+        {pageItems.map((q) => (
           <button
             key={q.id}
             type="button"
@@ -426,6 +439,7 @@ function StartRound({ open, refresh }: { open: boolean; refresh: () => Promise<v
           </button>
         ))}
       </div>
+      <Pager page={page} pages={pages} onPage={setQPage} />
       <label className="label" htmlFor="custom-q">Or type a question</label>
       <input id="custom-q" className="input" value={picked} maxLength={300} onChange={(e) => setPicked(e.target.value)} placeholder="Ask AI to…" />
       <span className="label">Prompting method</span>
@@ -958,6 +972,11 @@ function Questions() {
   const [list, setList] = useState<Question[]>([]);
   const [text, setText] = useState('');
   const [error, setError] = useState('');
+  const [note, setNote] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [qPage, setQPage] = useState(0);
+  const { pageItems, pages, page } = paginate(list, qPage, 10);
+  const missing = SAMPLE_QUESTIONS.filter((q) => !list.some((x) => x.text.trim() === q));
 
   const load = async () => {
     const { data, error } = await supabase.from('questions').select('*').order('created_at');
@@ -966,9 +985,23 @@ function Questions() {
   };
   useEffect(() => { load(); }, []);
 
+  async function addSamples() {
+    if (!missing.length) return;
+    setAdding(true);
+    setError('');
+    const { error } = await supabase.from('questions').insert(missing.map((q) => ({ text: q })));
+    setAdding(false);
+    if (error) { setError(friendly(error)); return; }
+    setNote(`Added ${missing.length} questions.`);
+    await load();
+  }
+
   return (
     <section className="card stack narrow-card">
-      <h2>Question bank</h2>
+      <div className="row between wrap">
+        <h2>Question bank</h2>
+        <span className="muted small">{list.length} questions</span>
+      </div>
       <form
         className="row"
         onSubmit={async (e) => {
@@ -978,15 +1011,23 @@ function Questions() {
           if (error) { setError(friendly(error)); return; }
           setText('');
           setError('');
-          load();
+          await load();
+          setQPage(Number.MAX_SAFE_INTEGER); // show the last page, where the new question is
         }}
       >
         <input id="new-q" className="input" value={text} maxLength={300} onChange={(e) => setText(e.target.value)} placeholder="Ask AI to…" />
         <button className="btn primary" type="submit" disabled={text.trim().length < 3}>Add</button>
       </form>
+      {missing.length > 0 && (
+        <div className="sample-box">
+          <p className="small">{missing.length} ready-made questions (science, maths, environment, Kerala, study skills; English and Malayalam) aren't in your bank yet.</p>
+          <button className="btn" type="button" disabled={adding} onClick={addSamples}>{adding ? 'Adding…' : `Add ${missing.length} sample questions`}</button>
+        </div>
+      )}
+      {note && <p className="success small">{note}</p>}
       {error && <p className="error" role="alert">{error}</p>}
       <ul className="q-list">
-        {list.map((q) => (
+        {pageItems.map((q) => (
           <li key={q.id} className="row between">
             <span>{q.text}</span>
             <button
@@ -1003,6 +1044,7 @@ function Questions() {
           </li>
         ))}
       </ul>
+      <Pager page={page} pages={pages} onPage={setQPage} />
     </section>
   );
 }

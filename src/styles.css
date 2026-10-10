@@ -397,3 +397,9 @@ button.chip { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   .scan-label, .counter-num, .bubble { animation: none !important; }
 }
+
+/* Pages for long question lists */
+.pager { display: flex; align-items: center; justify-content: center; gap: 12px; }
+.pager-text { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--chalk-dim); min-width: 4ch; text-align: center; }
+.sample-box { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; background: rgba(143, 211, 255, 0.1); border: 1px dashed rgba(143, 211, 255, 0.4); border-radius: 12px; padding: 10px 12px; }
+.sample-box p { flex: 1; min-width: 200px; }
