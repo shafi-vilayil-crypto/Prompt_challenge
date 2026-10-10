@@ -48,6 +48,13 @@ Student prompts:
 ${JSON.stringify(prompts)}`;
 }
 
+class GeminiError extends Error {
+  constructor(message: string, public status: number) { super(message); }
+}
+
+/** AI Studio keys start with "AIza". Others (Vertex AI / Google Cloud keys, often "AQ.") don't work with this API. */
+export const looksLikeStudioKey = (key: string) => key.trim().startsWith('AIza');
+
 async function callGemini(s: AiSettings, text: string, signal?: AbortSignal): Promise<string> {
   const model = encodeURIComponent(s.model.trim() || DEFAULT_MODEL);
   let res: Response;
@@ -68,11 +75,11 @@ async function callGemini(s: AiSettings, text: string, signal?: AbortSignal): Pr
   if (!res.ok) {
     let msg = '';
     try { msg = (await res.json())?.error?.message ?? ''; } catch { /* ignore */ }
-    if (res.status === 400 && /api key/i.test(msg)) throw new Error('Gemini rejected the API key. Check it in AI scoring settings.');
-    if (res.status === 403) throw new Error('Gemini refused the key (403). Check the key and that the Gemini API is enabled for it.');
-    if (res.status === 404) throw new Error(`Your key can't use the model "${s.model}". Press "Save and test" in AI scoring to pick one it can use.`);
-    if (res.status === 429) throw new Error('Gemini rate limit reached. Wait a minute, then press "Score with AI" again.');
-    throw new Error(`Gemini error ${res.status}${msg ? `: ${msg}` : ''}`);
+    if (res.status === 400 && /api key/i.test(msg)) throw new GeminiError('Gemini rejected the API key. Check it in AI scoring settings.', 400);
+    if (res.status === 403) throw new GeminiError('Gemini refused the key (403). Check the key and that the Gemini API is enabled for it.', 403);
+    if (res.status === 404) throw new GeminiError(`Your key can't use the model "${s.model}". Press "Save and test" in AI scoring to pick one it can use.`, 404);
+    if (res.status === 429) throw new GeminiError('Gemini rate limit reached. Wait a minute, then press "Score with AI" again.', 429);
+    throw new GeminiError(`Gemini error ${res.status}${msg ? `: ${msg}` : ''}`, res.status);
   }
   const data = await res.json();
   const out = (data?.candidates?.[0]?.content?.parts ?? []).map((p: { text?: string }) => p.text ?? '').join('');
@@ -147,15 +154,30 @@ export function pickModel(names: string[]): string | null {
  */
 export async function aiTest(s: AiSettings): Promise<{ model: string; switched: boolean; available: string[] }> {
   const available = await listModels(s.apiKey);
-  let model = s.model.trim();
-  let switched = false;
-  if (!available.includes(model)) {
-    const best = pickModel(available);
-    if (!best) throw new Error('This key has no Gemini text models available. Check the key in Google AI Studio.');
-    model = best;
-    switched = true;
+  const wanted = s.model.trim();
+  // Try the chosen model first (if the key lists it), then the best other flash models.
+  const ranked: string[] = [];
+  let rest = available.filter((n) => n !== wanted);
+  for (let i = 0; i < 4; i++) {
+    const next = pickModel(rest);
+    if (!next) break;
+    ranked.push(next);
+    rest = rest.filter((n) => n !== next);
   }
-  const raw = await callGemini({ ...s, model }, 'Reply with JSON only: {"ok":true}');
-  if (!/ok/.test(raw)) throw new Error('Gemini answered, but not as expected.');
-  return { model, switched, available };
+  const candidates = [...(available.includes(wanted) ? [wanted] : []), ...ranked];
+  if (!candidates.length) throw new Error('This key has no Gemini text models available. Check the key in Google AI Studio.');
+  for (const model of candidates) {
+    try {
+      const raw = await callGemini({ ...s, model }, 'Reply with JSON only: {"ok":true}');
+      if (!/ok/.test(raw)) throw new Error('Gemini answered, but not as expected.');
+      return { model, switched: model !== wanted, available };
+    } catch (e) {
+      if (!(e instanceof GeminiError && e.status === 404)) throw e;
+    }
+  }
+  throw new Error(
+    looksLikeStudioKey(s.apiKey)
+      ? "Gemini lists models for this key but won't run any of them. Create a new key at aistudio.google.com/apikey."
+      : 'This key can\'t run Gemini models here. It doesn\'t look like a Google AI Studio key (those start with "AIza"). Create one at aistudio.google.com/apikey.',
+  );
 }

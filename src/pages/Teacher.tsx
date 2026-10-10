@@ -15,7 +15,7 @@ import { LangToggle } from '../components/LangToggle';
 import { Timer } from '../components/Timer';
 import { Leaderboard } from '../components/Leaderboard';
 import { PartChips } from '../components/PartChips';
-import { DEFAULT_MODEL, aiReady, aiScore, aiTest, loadAi, saveAi, type AiResult, type AiSettings } from '../lib/ai';
+import { DEFAULT_MODEL, aiReady, aiScore, aiTest, loadAi, looksLikeStudioKey, saveAi, type AiResult, type AiSettings } from '../lib/ai';
 import { Brand } from './Student';
 
 type Tab = 'run' | 'screen' | 'questions';
@@ -494,6 +494,9 @@ function AiSettingsCard({ ai, setAi }: { ai: AiSettings; setAi: (s: AiSettings) 
             <input id="ai-key" className="input" type={show ? 'text' : 'password'} autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste your key" />
             <button className="btn small" type="button" onClick={() => setShow((v) => !v)}>{show ? 'Hide' : 'Show'}</button>
           </div>
+          {key.trim().length > 10 && !looksLikeStudioKey(key) && (
+            <p className="error small">This doesn't look like a Google AI Studio key (those start with "AIza"). Keys starting with "AQ." are usually Vertex AI keys and won't work here.</p>
+          )}
           <label className="label" htmlFor="ai-model">Model</label>
           <input id="ai-model" className="input" list="ai-models" value={model} onChange={(e) => setModel(e.target.value)} placeholder={DEFAULT_MODEL} />
           <datalist id="ai-models">{models.map((m) => <option key={m} value={m} />)}</datalist>
