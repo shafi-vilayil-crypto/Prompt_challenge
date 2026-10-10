@@ -49,7 +49,7 @@ With AI scoring on, a **Claude fallback** card appears. Switch it on, paste an A
 Every Claude request costs money, so the app limits them:
 
 - **Calls per day** (default 30) and **calls per round** (default 5) for Claude, set in the Claude fallback card, with today's calls and an estimated cost shown there. One call scores up to 20 prompts; each answer is capped at 8,000 output tokens. Every call that reaches Anthropic counts, even if it failed.
-- **No retry loops:** each prompt is sent to the AI at most twice automatically; after an error, automatic scoring pauses for a minute ("Score with AI" can still try at once). The Claude SDK retries a failed request at most once.
+- **Automatic retries with backoff, no loops:** after an error the next automatic try waits 1, 2, 4, then 5 minutes (reset after a success), at most 6 tries per prompt; the screen shows the countdown, and "Score with AI" can try at once. Checks continue until the scores are published. The Claude SDK retries a failed request at most once.
 - **At most 80 prompts per round** go to the AI, so fake submissions can't run up a bill. The rest keep the word check.
 - **No paying twice:** AI results are saved in the teacher's browser per round, so reloading the page doesn't re-score them; only one open teacher tab calls the AI at a time.
 

@@ -10,9 +10,9 @@ const LOCK_KEY = 'prompt-challenge.ai-lock';
 /** Most prompts per round sent to the AI. Beyond this they keep the word check (protects against fake floods). */
 export const MAX_AI_PROMPTS_PER_ROUND = 80;
 /** Automatic AI attempts per prompt; after that only the teacher's "Score with AI" button tries again. */
-export const MAX_AUTO_ATTEMPTS = 2;
-/** Pause before automatic scoring tries again after an error. */
-export const COOLDOWN_AFTER_ERROR_MS = 60_000;
+export const MAX_AUTO_ATTEMPTS = 6;
+/** Wait before the next automatic try after consecutive errors: 1, 2, 4, then 5 minutes. */
+export const backoffMs = (failures: number) => Math.min(60_000 * 2 ** Math.max(0, failures - 1), 5 * 60_000);
 
 // ───────────── Claude usage and limits ─────────────
 

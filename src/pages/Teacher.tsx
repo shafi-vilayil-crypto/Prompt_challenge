@@ -19,7 +19,7 @@ import { DEFAULT_MODEL, aiTest, loadAi, saveAi, type AiResult, type AiSettings }
 import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL, claudeTest, loadClaude, saveClaude, type ClaudeSettings } from '../lib/claude';
 import { aiReady, scoreWithFallback } from '../lib/scorer';
 import {
-  COOLDOWN_AFTER_ERROR_MS, MAX_AI_PROMPTS_PER_ROUND, MAX_AUTO_ATTEMPTS,
+  MAX_AI_PROMPTS_PER_ROUND, MAX_AUTO_ATTEMPTS, backoffMs,
   loadSavedResults, loadUsage, releaseAiLock, saveResults, takeAiLock, type ClaudeUsage,
 } from '../lib/budget';
 import { Brand } from './Student';
@@ -162,14 +162,14 @@ function Console() {
 const LIVE_EVERY_MS = 10_000;
 
 type AiState = {
-  results: Record<string, AiResult>; busy: boolean; error: string; note: string;
+  results: Record<string, AiResult>; busy: boolean; error: string; note: string; retryAt: number;
   run: (manual: boolean) => Promise<void>;
 };
 
 /**
  * AI scoring for the current round: Gemini first, Claude as the fallback. Runs live while the round is open.
- * Money guards: each prompt is sent at most MAX_AUTO_ATTEMPTS times automatically; after an error automatic
- * scoring pauses for a minute; at most MAX_AI_PROMPTS_PER_ROUND prompts per round go to the AI; results are
+ * Retries are automatic with backoff (1, 2, 4, then 5 minutes after consecutive errors), at most
+ * MAX_AUTO_ATTEMPTS per prompt; paid Claude calls are also capped per round and per day (see budget.ts); at most MAX_AI_PROMPTS_PER_ROUND prompts per round go to the AI; results are
  * saved so a reload never re-scores them; only one open teacher tab scores at a time.
  */
 function useAi(round: Round | null, subs: Submission[], open: boolean, ai: AiSettings, claude: ClaudeSettings): AiState {
@@ -179,6 +179,8 @@ function useAi(round: Round | null, subs: Submission[], open: boolean, ai: AiSet
   const [note, setNote] = useState('');
   const attempts = useRef(new Map<string, number>()); // automatic tries per prompt
   const cooldownUntil = useRef(0);
+  const failures = useRef(0);
+  const [retryAt, setRetryAt] = useState(0);
   const busyRef = useRef(false);
   const latest = useRef({ round, subs, ai, claude, results });
   latest.current = { round, subs, ai, claude, results };
@@ -190,6 +192,8 @@ function useAi(round: Round | null, subs: Submission[], open: boolean, ai: AiSet
     setNote('');
     attempts.current = new Map();
     cooldownUntil.current = 0;
+    failures.current = 0;
+    setRetryAt(0);
   }, [roundId]);
 
   useEffect(() => {
@@ -227,20 +231,25 @@ function useAi(round: Round | null, subs: Submission[], open: boolean, ai: AiSet
       await scoreWithFallback(ai, claude, rid, getMethod(round.method), round.question, todo.map((x) => ({ id: x.id, prompt: x.prompt })), (res) => {
         if (latest.current.round?.id === rid) setResults((r) => ({ ...r, ...res }));
       });
+      failures.current = 0;
+      cooldownUntil.current = 0;
+      setRetryAt(0);
     } catch (e) {
       setError((e as Error).message);
-      cooldownUntil.current = Date.now() + COOLDOWN_AFTER_ERROR_MS;
+      failures.current += 1;
+      cooldownUntil.current = Date.now() + backoffMs(failures.current);
+      setRetryAt(cooldownUntil.current);
     } finally {
       busyRef.current = false;
       setBusy(false);
     }
   }, []);
 
-  // Live scoring: while the round is open, send new prompts to the AI in one batch every 10 seconds
-  // (a few calls a minute however many students there are), and once more when the round closes.
+  // Live scoring: every 10 seconds until the scores are published, new or unscored prompts go to the AI in
+  // one batch (a few calls a minute however many students). A check with nothing to score sends nothing;
+  // after an error the backoff above decides when the next try happens.
   useEffect(() => {
     if (!round || round.published || !aiReady(ai, claude)) return;
-    if (!open) { run(false); return; }
     run(false);
     const t = setInterval(() => run(false), LIVE_EVERY_MS);
     return () => clearInterval(t);
@@ -253,7 +262,7 @@ function useAi(round: Round | null, subs: Submission[], open: boolean, ai: AiSet
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subs.length]);
 
-  return { results, busy, error, note, run };
+  return { results, busy, error, note, retryAt, run };
 }
 
 type Mark = { parts: string[]; bonus: number };
@@ -530,7 +539,8 @@ function Scoring({ round, subs, refresh, open, aiOn, aiState, scoring }: {
       )}
       {aiState.error && (
         <p className="error" role="alert">
-          {aiState.error} The word check scores are kept. Automatic scoring pauses for a minute; press "Score with AI" to try now.
+          {aiState.error} The word check scores are kept.{' '}
+          <RetryCountdown at={aiState.retryAt} /> Press "Score with AI" to try now.
         </p>
       )}
       {aiState.note && <p className="muted small" role="status">{aiState.note}</p>}
@@ -669,6 +679,19 @@ function useClaudeUsage(): ClaudeUsage {
     return () => { window.removeEventListener('claude-usage', update); window.removeEventListener('storage', update); clearInterval(t); };
   }, []);
   return usage;
+}
+
+/** "AI retries automatically in 1:20." while a backoff is running. */
+function RetryCountdown({ at }: { at: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!at) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [at]);
+  const left = Math.ceil((at - now) / 1000);
+  if (!at || left <= 0) return <>AI is trying again automatically.</>;
+  return <>AI retries automatically in {Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')}.</>;
 }
 
 function ClaudeCard({ claude, setClaude }: { claude: ClaudeSettings; setClaude: (c: ClaudeSettings) => void }) {
