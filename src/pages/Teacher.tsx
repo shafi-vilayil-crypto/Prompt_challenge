@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import type { Session } from '@supabase/supabase-js';
 import {
@@ -120,6 +120,13 @@ function Console() {
   };
   usePoll(refresh, 2000);
 
+  const left = useSecondsLeft(round?.ends_at);
+  const open = Boolean(round && !round.published && left > 0);
+  const [ai, setAiState] = useState<AiSettings>(loadAi);
+  const setAi = (next: AiSettings) => { saveAi(next); setAiState(next); };
+  const aiState = useAi(round, subs, open, ai);
+  const scoring = useMarks(round, subs, aiState.results);
+
   return (
     <main className={`page${tab === 'screen' ? ' screen-page' : ''}`}>
       <Brand>
@@ -133,20 +140,117 @@ function Console() {
         </nav>
       </Brand>
       {offline && <p className="banner">Can't reach Supabase. Check the internet; it retries every 2 seconds.</p>}
-      {tab === 'run' && <Run round={round} subs={subs} board={board} refresh={refresh} />}
+      {tab === 'run' && (
+        <Run round={round} subs={subs} board={board} refresh={refresh} open={open} ai={ai} setAi={setAi} aiState={aiState} scoring={scoring} />
+      )}
       {tab === 'screen' && <Projector round={round} subs={subs} board={board} />}
       {tab === 'questions' && <Questions />}
     </main>
   );
 }
 
+// ───────────── Scoring state (kept here so it survives switching tabs) ─────────────
+
+type AiState = { results: Record<string, AiResult>; busy: boolean; error: string; run: (onlyUntried: boolean) => Promise<void> };
+
+/** Gemini scoring for the current round. Runs by itself when the round closes (if AI is on). */
+function useAi(round: Round | null, subs: Submission[], open: boolean, ai: AiSettings): AiState {
+  const [results, setResults] = useState<Record<string, AiResult>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const tried = useRef(new Set<string>()); // prompts already sent automatically
+  const busyRef = useRef(false);
+  const latest = useRef({ round, subs, ai, results });
+  latest.current = { round, subs, ai, results };
+  const roundId = round?.id;
+
+  useEffect(() => { setResults({}); setError(''); tried.current = new Set(); }, [roundId]);
+
+  const run = useCallback(async (onlyUntried: boolean) => {
+    const { round, subs, ai, results } = latest.current;
+    if (!round || !aiReady(ai) || busyRef.current) return;
+    const todo = subs.filter((x) => !results[x.id] && (!onlyUntried || !tried.current.has(x.id)));
+    if (!todo.length) return;
+    todo.forEach((x) => tried.current.add(x.id));
+    busyRef.current = true;
+    setBusy(true);
+    setError('');
+    const rid = round.id;
+    try {
+      await aiScore(ai, getMethod(round.method), round.question, todo.map((x) => ({ id: x.id, prompt: x.prompt })), (res) => {
+        if (latest.current.round?.id === rid) setResults((r) => ({ ...r, ...res }));
+      });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (round && !open && !round.published && aiReady(ai)) run(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roundId, open, round?.published, subs.length, ai.enabled, ai.apiKey]);
+
+  return { results, busy, error, run };
+}
+
+type Mark = { parts: string[]; bonus: number };
+type ScoringState = { marks: Marks; update: (id: string, fn: (m: Mark) => Mark) => void; dirty: boolean; setDirty: (d: boolean) => void };
+
+/** The teacher's marks per prompt: saved marks, else Gemini's, else the word check. Hand edits always win. */
+function useMarks(round: Round | null, subs: Submission[], aiResults: Record<string, AiResult>): ScoringState {
+  const [marks, setMarks] = useState<Marks>({});
+  const [dirty, setDirty] = useState(false);
+  const touched = useRef(new Set<string>());
+  const applied = useRef(new Set<string>());
+  const roundId = round?.id;
+
+  useEffect(() => { setMarks({}); setDirty(false); touched.current = new Set(); applied.current = new Set(); }, [roundId]);
+
+  useEffect(() => {
+    if (!round) return;
+    const method = getMethod(round.method);
+    // Gemini results not applied yet (and not overridden by hand): decided here, outside the state update.
+    const fromAi = subs.filter((s) => aiResults[s.id] && !applied.current.has(s.id) && !touched.current.has(s.id));
+    fromAi.forEach((s) => applied.current.add(s.id));
+    if (fromAi.length) setDirty(true);
+    setMarks((m) => {
+      let changed = false;
+      const next = { ...m };
+      for (const s of fromAi) {
+        next[s.id] = { parts: aiResults[s.id].parts, bonus: aiResults[s.id].bonus };
+        changed = true;
+      }
+      for (const s of subs) {
+        if (!next[s.id]) {
+          next[s.id] = s.score !== null ? { parts: s.parts, bonus: s.bonus } : { parts: autoParts(method, s.prompt), bonus: 0 };
+          changed = true;
+        }
+      }
+      return changed ? next : m;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subs, aiResults, roundId]);
+
+  const update = (id: string, fn: (m: Mark) => Mark) => {
+    touched.current.add(id);
+    setMarks((m) => ({ ...m, [id]: fn(m[id] ?? { parts: [], bonus: 0 }) }));
+    setDirty(true);
+  };
+
+  return { marks, update, dirty, setDirty };
+}
+
 // ───────────── Run the game ─────────────
 
-function Run({ round, subs, board, refresh }: { round: Round | null; subs: Submission[]; board: LeaderRow[]; refresh: () => Promise<void> }) {
-  const left = useSecondsLeft(round?.ends_at);
-  const open = Boolean(round && !round.published && left > 0);
-  const [ai, setAiState] = useState<AiSettings>(loadAi);
-  const setAi = (next: AiSettings) => { saveAi(next); setAiState(next); };
+type RunProps = {
+  round: Round | null; subs: Submission[]; board: LeaderRow[]; refresh: () => Promise<void>; open: boolean;
+  ai: AiSettings; setAi: (s: AiSettings) => void; aiState: AiState; scoring: ScoringState;
+};
+
+function Run({ round, subs, board, refresh, open, ai, setAi, aiState, scoring }: RunProps) {
 
   return (
     <div className="grid-2">
@@ -163,7 +267,7 @@ function Run({ round, subs, board, refresh }: { round: Round | null; subs: Submi
           </section>
         )}
         {round && (round.published || !open || subs.length > 0) && (
-          <Scoring key={round.id} round={round} subs={subs} refresh={refresh} open={open} ai={ai} />
+          <Scoring key={round.id} round={round} subs={subs} refresh={refresh} open={open} ai={ai} aiState={aiState} scoring={scoring} />
         )}
         <StartRound open={open} refresh={refresh} />
       </div>
@@ -278,69 +382,20 @@ function StartRound({ open, refresh }: { open: boolean; refresh: () => Promise<v
   );
 }
 
-function Scoring({ round, subs, refresh, open, ai }: { round: Round; subs: Submission[]; refresh: () => Promise<void>; open: boolean; ai: AiSettings }) {
+function Scoring({ round, subs, refresh, open, ai, aiState, scoring }: {
+  round: Round; subs: Submission[]; refresh: () => Promise<void>; open: boolean; ai: AiSettings; aiState: AiState; scoring: ScoringState;
+}) {
   const method = getMethod(round.method);
   const max = method.parts.length * 2;
   const firstScore = (s: Submission) => s.score ?? scoreOf(method, autoParts(method, s.prompt), 0);
-  const [marks, setMarks] = useState<Marks>({});
+  const { marks, update, dirty, setDirty } = scoring;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
-  const [dirty, setDirty] = useState(false);
-  const [aiRes, setAiRes] = useState<Record<string, AiResult>>({});
-  const [aiBusy, setAiBusy] = useState(false);
-  const [aiError, setAiError] = useState('');
-  const touched = useRef(new Set<string>()); // prompts the teacher changed by hand: AI never overwrites them
-  const tried = useRef(new Set<string>());   // prompts already sent to Gemini automatically
-  const aiBusyRef = useRef(false);
-
-  async function runAi(onlyUntried: boolean) {
-    if (!aiReady(ai) || aiBusyRef.current) return;
-    const todo = subs.filter((x) => !aiRes[x.id] && (!onlyUntried || !tried.current.has(x.id)));
-    if (!todo.length) return;
-    todo.forEach((x) => tried.current.add(x.id));
-    aiBusyRef.current = true;
-    setAiBusy(true);
-    setAiError('');
-    try {
-      await aiScore(ai, method, round.question, todo.map((x) => ({ id: x.id, prompt: x.prompt })), (res) => {
-        setAiRes((r) => ({ ...r, ...res }));
-        setMarks((m) => {
-          const next = { ...m };
-          for (const [id, r] of Object.entries(res)) if (!touched.current.has(id)) next[id] = { parts: r.parts, bonus: r.bonus };
-          return next;
-        });
-        setDirty(true);
-      });
-    } catch (e) {
-      setAiError((e as Error).message);
-    } finally {
-      aiBusyRef.current = false;
-      setAiBusy(false);
-    }
-  }
-
-  // With AI on, score automatically once the round closes (and again if late prompts appear before publishing).
-  useEffect(() => {
-    if (!open && !round.published && aiReady(ai)) runAi(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, round.published, subs.length, ai.enabled, ai.apiKey]);
-
-  // First time a prompt is seen: published rounds keep their saved marks, new ones get the auto-score.
-  useEffect(() => {
-    setMarks((m) => {
-      let changed = false;
-      const next = { ...m };
-      for (const s of subs) {
-        if (!next[s.id]) {
-          next[s.id] = s.score !== null ? { parts: s.parts, bonus: s.bonus } : { parts: autoParts(method, s.prompt), bonus: 0 };
-          changed = true;
-        }
-      }
-      return changed ? next : m;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subs]);
+  const [armed, setArmed] = useState(false); // second tap needed to publish without Gemini
+  const aiOn = aiReady(ai);
+  const scoredByAi = (s: Submission) => Boolean(aiState.results[s.id] || s.feedback);
+  const pending = subs.filter((s) => !scoredByAi(s)).length;
 
   // Best first, by the saved or auto score. Re-sorted only when prompts arrive, so cards don't jump while the teacher taps.
   const ordered = useMemo(
@@ -349,21 +404,15 @@ function Scoring({ round, subs, refresh, open, ai }: { round: Round; subs: Submi
     [subs.length, round.published],
   );
 
-  const update = (id: string, fn: (m: { parts: string[]; bonus: number }) => { parts: string[]; bonus: number }) => {
-    touched.current.add(id);
-    setMarks((m) => ({ ...m, [id]: fn(m[id] ?? { parts: [], bonus: 0 }) }));
-    setDirty(true);
-    setSaved(false);
-  };
-
   async function publish() {
     setBusy(true);
     setError('');
+    setArmed(false);
     const payload = subs.map((s) => ({
       id: s.id,
       parts: marks[s.id]?.parts ?? [],
       bonus: marks[s.id]?.bonus ?? 0,
-      comment: aiRes[s.id]?.comment ?? s.feedback ?? '',
+      comment: aiState.results[s.id]?.comment ?? s.feedback ?? '',
     }));
     const { error } = await supabase.rpc('publish_round', { p_round: round.id, p_scores: payload });
     setBusy(false);
@@ -373,6 +422,31 @@ function Scoring({ round, subs, refresh, open, ai }: { round: Round; subs: Submi
     await refresh();
   }
 
+  async function endRound() {
+    setBusy(true);
+    setError('');
+    const { error } = await supabase.rpc('end_round', { p_round: round.id });
+    setBusy(false);
+    if (error) setError(friendly(error));
+    await refresh(); // Gemini starts by itself once the round is closed
+  }
+
+  // What the main button does depends on the round and on Gemini.
+  let action: { label: string; onClick: () => void; disabled?: boolean } ;
+  if (round.published) {
+    action = { label: dirty ? 'Update published scores' : 'Scores published', onClick: publish, disabled: !dirty };
+  } else if (aiOn && open) {
+    action = { label: 'End the round and score with Gemini', onClick: endRound };
+  } else if (aiOn && aiState.busy) {
+    action = { label: `Gemini is scoring… (${pending} left)`, onClick: () => {}, disabled: true };
+  } else if (aiOn && pending > 0) {
+    action = armed
+      ? { label: `Tap again to publish ${pending} without Gemini`, onClick: publish }
+      : { label: 'Publish scores to everyone', onClick: () => { setArmed(true); setTimeout(() => setArmed(false), 5000); } };
+  } else {
+    action = { label: 'Publish scores to everyone', onClick: publish };
+  }
+
   if (!subs.length) return <section className="card"><p className="muted">No prompts yet.</p></section>;
 
   return (
@@ -380,20 +454,21 @@ function Scoring({ round, subs, refresh, open, ai }: { round: Round; subs: Submi
       <div className="row between wrap">
         <h2>Score the prompts</h2>
         <span className="muted small">
-          {method.name.en} · {aiReady(ai) ? 'scored by Gemini (word check until it answers)' : 'word check'}. Tap a part to change it.
+          {method.name.en} · {aiOn ? 'Gemini checks each prompt against the question' : 'word check only (AI scoring is off)'}. Tap a part to change it.
         </span>
       </div>
-      {aiReady(ai) && !round.published && (
+      {aiOn && (
         <div className="row wrap">
-          <button className="btn" type="button" disabled={aiBusy || open || subs.every((x) => aiRes[x.id])} onClick={() => runAi(false)}>
-            {aiBusy ? 'Gemini is scoring…' : 'Score with AI'}
+          <button className="btn" type="button" disabled={aiState.busy || open || pending === 0} onClick={() => aiState.run(false)}>
+            {aiState.busy ? 'Gemini is scoring…' : 'Score with AI'}
           </button>
           <span className="muted small">
-            {open ? 'Gemini scores when the round ends.' : `${Object.keys(aiRes).length} of ${subs.length} scored by Gemini.`}
+            {open ? 'Gemini scores when the round ends.' : `${subs.length - pending} of ${subs.length} scored by Gemini.`}
           </span>
         </div>
       )}
-      {aiError && <p className="error" role="alert">{aiError} The word check scores are kept.</p>}
+      {aiState.error && <p className="error" role="alert">{aiState.error} The word check scores are kept.</p>}
+      {armed && <p className="error" role="alert">{pending} {pending === 1 ? 'prompt has' : 'prompts have'} only the word check, which can't tell if a prompt fits the question. Press "Score with AI" first, or tap again to publish anyway.</p>}
       <ul className="sub-list">
         {ordered.map((s) => {
           const m = marks[s.id] ?? { parts: [], bonus: 0 };
@@ -405,8 +480,10 @@ function Scoring({ round, subs, refresh, open, ai }: { round: Round; subs: Submi
               </div>
               <blockquote className="quote">{s.prompt}</blockquote>
               <span className="muted small">≈ {estimateTokens(s.prompt)} tokens</span>
-              {(aiRes[s.id]?.comment || s.feedback) && (
-                <p className="ai-comment"><span className="ai-tag">Gemini</span>{aiRes[s.id]?.comment || s.feedback}</p>
+              {aiState.results[s.id]?.comment || s.feedback ? (
+                <p className="ai-comment"><span className="ai-tag">Gemini</span>{aiState.results[s.id]?.comment || s.feedback}</p>
+              ) : (
+                <span className="word-tag">{aiOn && aiState.busy ? 'Gemini is reading this…' : 'Word check only'}</span>
               )}
               <PartChips
                 method={method}
@@ -426,8 +503,8 @@ function Scoring({ round, subs, refresh, open, ai }: { round: Round; subs: Submi
           );
         })}
       </ul>
-      <button className="btn primary big" type="button" disabled={busy || (round.published && !dirty)} onClick={publish}>
-        {busy ? 'Publishing…' : round.published ? (dirty ? 'Update published scores' : 'Scores published') : 'Publish scores to everyone'}
+      <button className="btn primary big" type="button" disabled={busy || action.disabled} onClick={action.onClick}>
+        {busy ? 'Working…' : action.label}
       </button>
       {!round.published && <p className="muted small">Publishing also closes the round, so late prompts can't come in.</p>}
       {saved && <p className="success">Scores published. Students see them now.</p>}
