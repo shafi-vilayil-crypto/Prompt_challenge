@@ -442,6 +442,7 @@ function AiSettingsCard({ ai, setAi }: { ai: AiSettings; setAi: (s: AiSettings) 
   const [show, setShow] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [testing, setTesting] = useState(false);
+  const [models, setModels] = useState<string[]>([]);
 
   async function saveAndTest() {
     const next = { ...ai, apiKey: key.trim(), model: model.trim() || DEFAULT_MODEL };
@@ -449,8 +450,15 @@ function AiSettingsCard({ ai, setAi }: { ai: AiSettings; setAi: (s: AiSettings) 
     setTesting(true);
     setStatus(null);
     try {
-      await aiTest(next);
-      setStatus({ ok: true, text: 'Saved. Gemini is working.' });
+      const r = await aiTest(next);
+      setModels(r.available);
+      if (r.switched) {
+        setModel(r.model);
+        setAi({ ...next, model: r.model });
+        setStatus({ ok: true, text: `Saved. Your key can't use "${next.model}", so it now uses ${r.model}. Gemini is working.` });
+      } else {
+        setStatus({ ok: true, text: `Saved. Gemini (${r.model}) is working.` });
+      }
     } catch (e) {
       setStatus({ ok: false, text: (e as Error).message });
     } finally {
@@ -487,7 +495,8 @@ function AiSettingsCard({ ai, setAi }: { ai: AiSettings; setAi: (s: AiSettings) 
             <button className="btn small" type="button" onClick={() => setShow((v) => !v)}>{show ? 'Hide' : 'Show'}</button>
           </div>
           <label className="label" htmlFor="ai-model">Model</label>
-          <input id="ai-model" className="input" value={model} onChange={(e) => setModel(e.target.value)} placeholder={DEFAULT_MODEL} />
+          <input id="ai-model" className="input" list="ai-models" value={model} onChange={(e) => setModel(e.target.value)} placeholder={DEFAULT_MODEL} />
+          <datalist id="ai-models">{models.map((m) => <option key={m} value={m} />)}</datalist>
           <button className="btn primary" type="button" disabled={testing || key.trim().length < 10} onClick={saveAndTest}>
             {testing ? 'Testing…' : 'Save and test'}
           </button>

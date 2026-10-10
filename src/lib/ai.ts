@@ -70,7 +70,7 @@ async function callGemini(s: AiSettings, text: string, signal?: AbortSignal): Pr
     try { msg = (await res.json())?.error?.message ?? ''; } catch { /* ignore */ }
     if (res.status === 400 && /api key/i.test(msg)) throw new Error('Gemini rejected the API key. Check it in AI scoring settings.');
     if (res.status === 403) throw new Error('Gemini refused the key (403). Check the key and that the Gemini API is enabled for it.');
-    if (res.status === 404) throw new Error(`Gemini doesn't know the model "${s.model}". Try ${DEFAULT_MODEL}.`);
+    if (res.status === 404) throw new Error(`Your key can't use the model "${s.model}". Press "Save and test" in AI scoring to pick one it can use.`);
     if (res.status === 429) throw new Error('Gemini rate limit reached. Wait a minute, then press "Score with AI" again.');
     throw new Error(`Gemini error ${res.status}${msg ? `: ${msg}` : ''}`);
   }
@@ -114,8 +114,48 @@ export async function aiScore(
   }
 }
 
-/** A tiny request to check the key and model work. */
-export async function aiTest(s: AiSettings): Promise<void> {
-  const raw = await callGemini(s, 'Reply with JSON only: {"ok":true}');
+/** Models this key can use for text generation, without the "models/" prefix. */
+export async function listModels(apiKey: string): Promise<string[]> {
+  let res: Response;
+  try {
+    res = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000', { headers: { 'x-goog-api-key': apiKey.trim() } });
+  } catch {
+    throw new Error("Can't reach Gemini. Check the internet connection.");
+  }
+  if (res.status === 400 || res.status === 403) throw new Error('Gemini rejected the API key. Check it and try again.');
+  if (!res.ok) throw new Error(`Gemini error ${res.status} while listing models.`);
+  const data = await res.json();
+  return (data?.models ?? [])
+    .filter((m: { supportedGenerationMethods?: string[] }) => m.supportedGenerationMethods?.includes('generateContent'))
+    .map((m: { name: string }) => m.name.replace(/^models\//, ''));
+}
+
+/** Picks the newest general "flash" model: fast and on the free tier. Avoids image, audio and other special models. */
+export function pickModel(names: string[]): string | null {
+  const special = /(image|tts|audio|live|embed|vision|learnlm|gemma|computer|robotics|native)/i;
+  const version = (n: string) => Number(n.match(/gemini-(\d+(?:\.\d+)?)/)?.[1] ?? 0);
+  const rank = (n: string) => version(n) * 10 - (/lite/.test(n) ? 3 : 0) - (/(preview|exp)/.test(n) ? 5 : 0) + (/-latest$/.test(n) ? 1 : 0);
+  const flash = names.filter((n) => /^gemini-/.test(n) && /flash/.test(n) && !special.test(n));
+  if (flash.includes('gemini-flash-latest')) return 'gemini-flash-latest'; // Google's alias for the current stable flash model
+  const pool = flash.length ? flash : names.filter((n) => /^gemini-/.test(n) && !special.test(n));
+  return pool.sort((a, b) => rank(b) - rank(a))[0] ?? null;
+}
+
+/**
+ * Checks the key, makes sure the model is one this key can use (picking one if not),
+ * then sends a tiny request. Returns the model to use.
+ */
+export async function aiTest(s: AiSettings): Promise<{ model: string; switched: boolean; available: string[] }> {
+  const available = await listModels(s.apiKey);
+  let model = s.model.trim();
+  let switched = false;
+  if (!available.includes(model)) {
+    const best = pickModel(available);
+    if (!best) throw new Error('This key has no Gemini text models available. Check the key in Google AI Studio.');
+    model = best;
+    switched = true;
+  }
+  const raw = await callGemini({ ...s, model }, 'Reply with JSON only: {"ok":true}');
   if (!/ok/.test(raw)) throw new Error('Gemini answered, but not as expected.');
+  return { model, switched, available };
 }
